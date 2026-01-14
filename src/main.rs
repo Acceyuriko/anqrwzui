@@ -1,28 +1,46 @@
+use iced::widget::{button, column, text};
+use iced::{Element, Sandbox, Settings};
 
-use iced::widget::{button, column, text, Column};
-use iced::Theme;
-
-pub fn main() -> iced::Result {
-    iced::application(u64::default, update, view)
-        .theme(Theme::Light)
-        .centered()
-        .run()
+fn main() -> iced::Result {
+    MyApp::run(Settings::default())
 }
 
-#[derive(Debug, Clone)]
+struct MyApp {
+    count: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum Message {
-    Increment,
+    IncrementPressed,
+    DecrementPressed,
 }
 
-fn update(value: &mut u64, message: Message) {
-    match message {
-        Message::Increment => *value += 1,
+impl Sandbox for MyApp {
+    type Message = Message;
+
+    fn new() -> Self {
+        Self { count: 0 }
     }
-}
 
-fn view(value: &u64) -> Column<'_, Message> {
-    column![
-        text(value),
-        button("+").on_press(Message::Increment)
-    ]
+    fn title(&self) -> String {
+        String::from("Iced GUI App")
+    }
+
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::IncrementPressed => self.count += 1,
+            Message::DecrementPressed => self.count -= 1,
+        }
+    }
+
+    fn view(&self) -> Element<'_, Message> {
+        column![
+            text(format!("Current count: {}", self.count)),
+            button("Increment").on_press(Message::IncrementPressed),
+            button("Decrement").on_press(Message::DecrementPressed),
+        ]
+        .padding(20)
+        .spacing(10)
+        .into()
+    }
 }
