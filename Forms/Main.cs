@@ -5,6 +5,7 @@ using System.Windows.Forms;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 namespace anqrwzui;
 
 public partial class Main : Form
@@ -25,6 +26,8 @@ public partial class Main : Form
     private long _lastCaptureTicks = 0;
     private readonly double _targetFrameMs = 16.0; // 约60FPS
     private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+    private IntPtr _mouseHookId = IntPtr.Zero;
+    private NativeMethods.LowLevelMouseProc? _mouseProc;
 
     public Main()
     {
@@ -32,6 +35,7 @@ public partial class Main : Form
         InitializeComponent();
         InitializeCaptureComponents();
         InitializeDetection();
+        SetupGlobalMouseHook();
         Logger.Info("应用程序初始化完成");
     }
 
@@ -330,9 +334,100 @@ public partial class Main : Form
 
         StopCapture();
         _yoloDetector?.Dispose();
+        ReleaseGlobalMouseHook();
 
         base.OnFormClosing(e);
 
         Logger.Info("应用程序已关闭");
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        // 再次确保资源释放
+        StopCapture();
+        base.OnFormClosed(e);
+    }
+
+    private void SetupGlobalMouseHook()
+    {
+        _mouseProc = MouseHookCallback;
+        _mouseHookId = NativeMethods.SetHook(_mouseProc);
+        if (_mouseHookId == IntPtr.Zero)
+        {
+            Logger.Error("全局鼠标钩子设置失败");
+        }
+        else
+        {
+            Logger.Info("全局鼠标钩子已启动");
+        }
+    }
+
+    private void ReleaseGlobalMouseHook()
+    {
+        if (_mouseHookId != IntPtr.Zero)
+        {
+            NativeMethods.UnhookWindowsHookEx(_mouseHookId);
+            _mouseHookId = IntPtr.Zero;
+            Logger.Info("全局鼠标钩子已释放");
+        }
+        _mouseProc = null;
+    }
+
+    private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        const int WM_LBUTTONDOWN = 0x0201;
+
+        if (nCode >= 0 && wParam == (IntPtr)WM_LBUTTONDOWN)
+        {
+            var hookStruct = Marshal.PtrToStructure<NativeMethods.MSLLHOOKSTRUCT>(lParam);
+            Logger.Info($"捕获全局左键点击: x={hookStruct.pt.x}, y={hookStruct.pt.y}");
+        }
+
+        return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+    }
+
+    private static class NativeMethods
+    {
+        public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+        #pragma warning disable CS0649 // 字段由 Win32 填充，代码中不直接赋值
+        public struct POINT
+        {
+            public int x;
+            public int y;
+        }
+
+        public struct MSLLHOOKSTRUCT
+        {
+            public POINT pt;
+            public int mouseData;
+            public int flags;
+            public int time;
+            public IntPtr dwExtraInfo;
+        }
+        #pragma warning restore CS0649
+
+        private const int WH_MOUSE_LL = 14;
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        public static extern IntPtr GetModuleHandle(string? lpModuleName);
+
+        public static IntPtr SetHook(LowLevelMouseProc proc)
+        {
+            using var curProcess = Process.GetCurrentProcess();
+            using var curModule = curProcess.MainModule!;
+            var handle = GetModuleHandle(curModule.ModuleName);
+            return SetWindowsHookEx(WH_MOUSE_LL, proc, handle, 0);
+        }
     }
 }
