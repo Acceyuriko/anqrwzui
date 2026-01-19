@@ -80,13 +80,39 @@ namespace anqrwzui
 
       try
       {
-        SharpDX.DXGI.Resource screenResource;
+        SharpDX.DXGI.Resource? screenResource;
         OutputDuplicateFrameInformation duplicateFrameInformation;
+        bool frameAcquired = false;
 
-        // 尝试获取帧
-        _duplicatedOutput!.TryAcquireNextFrame(100, out duplicateFrameInformation, out screenResource);
+        var result = _duplicatedOutput!.TryAcquireNextFrame(100, out duplicateFrameInformation, out screenResource);
+        var resultCode = result.Code;
 
-        using (screenResource)
+        if (resultCode == SharpDX.DXGI.ResultCode.WaitTimeout.Code)
+        {
+          screenResource?.Dispose();
+          Logger.Debug("屏幕截取超时，没有新帧可用");
+          return null;
+        }
+
+        if (resultCode == SharpDX.DXGI.ResultCode.AccessLost.Code)
+        {
+          screenResource?.Dispose();
+          Logger.Warning("屏幕截取访问丢失，重新初始化");
+          Dispose();
+          Initialize();
+          return null;
+        }
+
+        if (result.Failure)
+        {
+          screenResource?.Dispose();
+          Logger.Error($"屏幕截取失败，TryAcquireNextFrame 返回: {resultCode}");
+          return null;
+        }
+
+        frameAcquired = true;
+
+        try
         {
           using (var screenTexture2D = screenResource.QueryInterface<Texture2D>())
           {
@@ -121,8 +147,13 @@ namespace anqrwzui
                 _screenTexture, 0, 0, 0, 0);
           }
         }
-
-        _duplicatedOutput.ReleaseFrame();
+        finally
+        {
+          if (frameAcquired)
+          {
+            _duplicatedOutput.ReleaseFrame();
+          }
+        }
 
         // 从纹理读取数据并转换为Bitmap
         var mapSource = _device.ImmediateContext.MapSubresource(

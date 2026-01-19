@@ -2,7 +2,9 @@ using System;
 using System.Drawing;
 using System.Collections.Generic;
 using System.Windows.Forms;
-
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 namespace anqrwzui;
 
 public partial class Main : Form
@@ -10,12 +12,19 @@ public partial class Main : Form
     private DxgiScreenCapture? _screenCapture;
     private YoloV8Detector? _yoloDetector;
     private PictureBox? _pictureBox;
-    private System.Windows.Forms.Timer? _captureTimer;
-    private System.Windows.Forms.Timer? _detectionTimer;
+    private CancellationTokenSource? _captureCts;
+    private Task? _captureTask;
     private bool _isCapturing = false;
-    private bool _isDetecting = false;
     private Bitmap? _currentFrame;
     private readonly object _frameLock = new object();
+    private Label? _deviceLabel; // 添加成员变量
+    private Label? _fpsLabel;
+    private Button? _toggleCaptureButton;
+    private int _fpsCount = 0;
+    private DateTime _fpsWindowStart = DateTime.UtcNow;
+    private long _lastCaptureTicks = 0;
+    private readonly double _targetFrameMs = 16.0; // 约60FPS
+    private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
 
     public Main()
     {
@@ -44,59 +53,44 @@ public partial class Main : Form
         };
         this.Controls.Add(_pictureBox);
 
-        // 创建控制面板
-        var panel = new Panel
+        // 创建控制面板（使用 FlowLayout 避免控件重叠）
+        var panel = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 40,
-            BackColor = Color.LightGray
+            Height = 52,
+            BackColor = Color.LightGray,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(10, 8, 10, 8)
         };
 
-        var startButton = new Button
+        _toggleCaptureButton = new Button
         {
-            Text = "开始截取",
-            Location = new Point(10, 8),
-            Size = new Size(80, 25)
+            Text = "开始",
+            Size = new Size(96, 28),
+            Margin = new Padding(0, 0, 12, 0)
         };
-        startButton.Click += StartButton_Click;
+        _toggleCaptureButton.Click += ToggleCapture_Click;
 
-        var stopButton = new Button
+        // 创建推理设备标签
+        _deviceLabel = new Label
         {
-            Text = "停止截取",
-            Location = new Point(100, 8),
-            Size = new Size(80, 25)
+            Text = "推理设备: 未知",
+            AutoSize = true,
+            ForeColor = Color.DarkBlue,
+            Margin = new Padding(0, 6, 18, 0)
         };
-        stopButton.Click += StopButton_Click;
-
-        var detectButton = new Button
+        _fpsLabel = new Label
         {
-            Text = "开始检测",
-            Location = new Point(190, 8),
-            Size = new Size(80, 25)
-        };
-        detectButton.Click += DetectButton_Click;
-
-        var statusLabel = new Label
-        {
-            Text = "就绪",
-            Location = new Point(280, 12),
-            Size = new Size(200, 20),
-            ForeColor = Color.DarkGreen
+            Text = "检测FPS: -",
+            AutoSize = true,
+            ForeColor = Color.Black,
+            Margin = new Padding(0, 6, 0, 0)
         };
 
-        panel.Controls.AddRange(new Control[] { startButton, stopButton, detectButton, statusLabel });
+        panel.Controls.AddRange(new Control[] { _toggleCaptureButton, _deviceLabel, _fpsLabel });
         this.Controls.Add(panel);
         this.Controls.SetChildIndex(panel, 0);
-
-        // 初始化截取计时器 - 设置为最快速度（约16ms间隔，约60FPS）
-        _captureTimer = new System.Windows.Forms.Timer();
-        _captureTimer.Interval = 16; // 约60FPS
-        _captureTimer.Tick += CaptureTimer_Tick;
-
-        // 初始化检测计时器 - 检测频率可以比截取频率低一些
-        _detectionTimer = new System.Windows.Forms.Timer();
-        _detectionTimer.Interval = 33; // 约30FPS检测
-        _detectionTimer.Tick += DetectionTimer_Tick;
 
         Logger.Debug("截取组件初始化完成");
     }
@@ -107,9 +101,8 @@ public partial class Main : Form
 
         try
         {
-            // 加载YOLOv8模型
             var modelPath = @"Model\yolov8n.onnx";
-            _yoloDetector = new YoloV8Detector(modelPath);
+            _yoloDetector = new YoloV8Detector(modelPath, UpdateDeviceLabel);
             Logger.Info("目标检测初始化成功");
         }
         catch (Exception ex)
@@ -117,10 +110,37 @@ public partial class Main : Form
             Logger.Error("目标检测初始化失败", ex);
             MessageBox.Show($"加载YOLOv8模型失败: {ex.Message}", "错误",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
+            UpdateDeviceLabel("推理设备: 初始化失败");
         }
     }
 
-    private void StartButton_Click(object? sender, EventArgs e)
+    // 添加设备标签更新方法
+    private void UpdateDeviceLabel(string device)
+    {
+        if (_deviceLabel == null) return;
+        if (_deviceLabel.InvokeRequired)
+        {
+            _deviceLabel.BeginInvoke(new Action(() => _deviceLabel.Text = $"推理设备: {device}"));
+        }
+        else
+        {
+            _deviceLabel.Text = $"推理设备: {device}";
+        }
+    }
+
+    private void ToggleCapture_Click(object? sender, EventArgs e)
+    {
+        if (_isCapturing)
+        {
+            StopCapture();
+        }
+        else
+        {
+            StartCapture();
+        }
+    }
+
+    private void StartCapture()
     {
         if (_isCapturing) return;
 
@@ -130,29 +150,35 @@ public partial class Main : Form
         {
             _screenCapture = new DxgiScreenCapture();
             _isCapturing = true;
-            _captureTimer?.Start();
+            _lastCaptureTicks = _stopwatch.ElapsedTicks;
+            _captureCts = new CancellationTokenSource();
+            _captureTask = Task.Run(() => CaptureLoopAsync(_captureCts.Token));
+            UpdateToggleButtonText();
             Logger.Info("屏幕截取已启动");
         }
         catch (Exception ex)
         {
+            _isCapturing = false;
+            UpdateToggleButtonText();
             Logger.Error("屏幕截取启动失败", ex);
             MessageBox.Show($"初始化屏幕截取失败: {ex.Message}", "错误",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
-    private void StopButton_Click(object? sender, EventArgs e)
+    private void StopCapture()
     {
         if (!_isCapturing) return;
 
         Logger.Info("停止屏幕截取");
 
         _isCapturing = false;
-        _isDetecting = false;
-        _captureTimer?.Stop();
-        _detectionTimer?.Stop();
+        _captureCts?.Cancel();
+        _captureCts?.Dispose();
+        _captureCts = null;
         _screenCapture?.Dispose();
         _screenCapture = null;
+        ResetFps();
 
         lock (_frameLock)
         {
@@ -165,103 +191,113 @@ public partial class Main : Form
             _pictureBox.Image = null;
         }
 
+        UpdateToggleButtonText();
+
         Logger.Info("屏幕截取已停止");
     }
 
-    private void DetectButton_Click(object? sender, EventArgs e)
+    private async Task CaptureLoopAsync(CancellationToken token)
     {
-        if (_yoloDetector == null)
+        while (!token.IsCancellationRequested)
         {
-            Logger.Warning("尝试启动检测但模型未加载");
-            MessageBox.Show("YOLOv8模型未加载成功", "错误",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
-        }
-
-        _isDetecting = !_isDetecting;
-        var button = sender as Button;
-        if (button != null)
-        {
-            button.Text = _isDetecting ? "停止检测" : "开始检测";
-        }
-
-        if (_isDetecting)
-        {
-            Logger.Info("开始目标检测");
-            _detectionTimer?.Start();
-        }
-        else
-        {
-            Logger.Info("停止目标检测");
-            _detectionTimer?.Stop();
-        }
-    }
-
-    private void CaptureTimer_Tick(object? sender, EventArgs e)
-    {
-        if (!_isCapturing || _screenCapture == null || _pictureBox == null) return;
-
-        try
-        {
-            var bitmap = _screenCapture.CaptureScreen();
-            if (bitmap != null)
+            var nowTicks = _stopwatch.ElapsedTicks;
+            var elapsedMs = (nowTicks - _lastCaptureTicks) * 1000.0 / Stopwatch.Frequency;
+            if (elapsedMs < _targetFrameMs)
             {
-                lock (_frameLock)
-                {
-                    // 更新当前帧
-                    _currentFrame?.Dispose();
-                    _currentFrame = bitmap;
-                }
-
-                // 如果不进行检测，直接显示原始图像
-                if (!_isDetecting)
-                {
-                    UpdatePictureBox(bitmap);
-                }
+                var delayMs = Math.Max(1, (int)(_targetFrameMs - elapsedMs));
+                try { await Task.Delay(delayMs, token); } catch (TaskCanceledException) { break; }
+                continue;
             }
-        }
-        catch (Exception ex)
-        {
-            Logger.Error("屏幕截取过程中发生错误", ex);
-        }
-    }
+            _lastCaptureTicks = nowTicks;
 
-    private void DetectionTimer_Tick(object? sender, EventArgs e)
-    {
-        if (!_isDetecting || _yoloDetector == null || _pictureBox == null) return;
-
-        Bitmap? frameToProcess = null;
-        lock (_frameLock)
-        {
-            if (_currentFrame != null)
+            if (!_isCapturing || _screenCapture == null || _pictureBox == null)
             {
-                frameToProcess = new Bitmap(_currentFrame);
+                try { await Task.Delay(50, token); } catch (TaskCanceledException) { break; }
+                continue;
             }
-        }
 
-        if (frameToProcess != null)
-        {
             try
             {
-                Logger.Debug("开始目标检测处理");
+                var bitmap = _screenCapture.CaptureScreen();
+                if (bitmap != null)
+                {
+                    Bitmap displayBitmap = bitmap;
 
-                // 进行目标检测
-                var detections = _yoloDetector.Detect(frameToProcess);
+                    if (_yoloDetector != null)
+                    {
+                        try
+                        {
+                            var detections = _yoloDetector.Detect(bitmap);
+                            displayBitmap = DetectionRenderer.DrawDetections(bitmap, detections);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Error("目标检测过程中发生错误", ex);
+                            displayBitmap = bitmap;
+                        }
+                    }
 
-                // 绘制检测结果
-                var resultImage = DetectionRenderer.DrawDetections(frameToProcess, detections);
+                    lock (_frameLock)
+                    {
+                        _currentFrame?.Dispose();
+                        _currentFrame = displayBitmap;
+                    }
 
-                // 更新显示
-                UpdatePictureBox(resultImage);
+                    UpdatePictureBox(displayBitmap);
 
-                frameToProcess.Dispose();
-                Logger.Debug($"目标检测完成，发现 {detections.Count} 个目标");
+                    UpdateFps();
+
+                    if (!ReferenceEquals(displayBitmap, bitmap))
+                    {
+                        bitmap.Dispose();
+                    }
+                }
             }
             catch (Exception ex)
             {
-                Logger.Error("目标检测过程中发生错误", ex);
-                frameToProcess.Dispose();
+                Logger.Error("屏幕截取过程中发生错误", ex);
             }
+        }
+    }
+
+    private void UpdateFps()
+    {
+        _fpsCount++;
+        var now = DateTime.UtcNow;
+        var elapsed = now - _fpsWindowStart;
+        if (elapsed.TotalSeconds >= 1.0)
+        {
+            var fps = _fpsCount / elapsed.TotalSeconds;
+            if (_fpsLabel != null)
+            {
+                _fpsLabel.Text = $"检测FPS: {fps:F1}";
+            }
+            _fpsCount = 0;
+            _fpsWindowStart = now;
+        }
+    }
+
+    private void ResetFps()
+    {
+        _fpsCount = 0;
+        _fpsWindowStart = DateTime.UtcNow;
+        if (_fpsLabel != null)
+        {
+            _fpsLabel.Text = "检测FPS: -";
+        }
+    }
+
+    private void UpdateToggleButtonText()
+    {
+        if (_toggleCaptureButton == null) return;
+        var text = _isCapturing ? "停止" : "开始";
+        if (_toggleCaptureButton.InvokeRequired)
+        {
+            _toggleCaptureButton.BeginInvoke(new Action(() => _toggleCaptureButton.Text = text));
+        }
+        else
+        {
+            _toggleCaptureButton.Text = text;
         }
     }
 
@@ -292,17 +328,8 @@ public partial class Main : Form
     {
         Logger.Info("应用程序正在关闭");
 
-        _isCapturing = false;
-        _isDetecting = false;
-        _captureTimer?.Stop();
-        _detectionTimer?.Stop();
-        _screenCapture?.Dispose();
+        StopCapture();
         _yoloDetector?.Dispose();
-
-        lock (_frameLock)
-        {
-            _currentFrame?.Dispose();
-        }
 
         base.OnFormClosing(e);
 
