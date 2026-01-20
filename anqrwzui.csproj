@@ -23,4 +23,12 @@
     <PackageReference Include="SharpDX.Direct3D11" Version="4.2.0" />
     <PackageReference Include="SharpDX.DXGI" Version="4.2.0" />
   </ItemGroup>
+  
+  <!-- 确保 kmllib.dll 被复制到输出目录，供 P/Invoke 加载 -->
+  <ItemGroup>
+    <None Update="Libs\gbild64.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <TargetPath>gbild64.dll</TargetPath>
+    </None>
+  </ItemGroup>
 </Project>

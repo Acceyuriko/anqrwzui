@@ -1,11 +1,6 @@
-using System;
-using System.Drawing;
-using System.Collections.Generic;
-using System.Windows.Forms;
 using System.Diagnostics;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Runtime.InteropServices;
+
 namespace anqrwzui;
 
 public partial class Main : Form
@@ -28,6 +23,8 @@ public partial class Main : Form
     private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
     private IntPtr _mouseHookId = IntPtr.Zero;
     private NativeMethods.LowLevelMouseProc? _mouseProc;
+    private readonly MouseController _mouseController = new MouseController();
+    private CancellationTokenSource? _mouseMoveCts;
 
     public Main()
     {
@@ -281,6 +278,37 @@ public partial class Main : Form
         }
     }
 
+    private void StartMouseDownMove()
+    {
+        if (_mouseMoveCts != null)
+            return;
+
+        _mouseMoveCts = new CancellationTokenSource();
+        var token = _mouseMoveCts.Token;
+        Task.Run(async () =>
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    _mouseController.MoveRelative(0, 2);
+                    try { await Task.Delay(10, token); } catch (TaskCanceledException) { break; }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("持续鼠标下移任务异常", ex);
+            }
+        }, token);
+    }
+
+    private void StopMouseDownMove()
+    {
+        _mouseMoveCts?.Cancel();
+        _mouseMoveCts?.Dispose();
+        _mouseMoveCts = null;
+    }
+
     private void ResetFps()
     {
         _fpsCount = 0;
@@ -334,6 +362,7 @@ public partial class Main : Form
 
         StopCapture();
         _yoloDetector?.Dispose();
+        StopMouseDownMove();
         ReleaseGlobalMouseHook();
 
         base.OnFormClosing(e);
@@ -345,6 +374,7 @@ public partial class Main : Form
     {
         // 再次确保资源释放
         StopCapture();
+        StopMouseDownMove();
         base.OnFormClosed(e);
     }
 
@@ -376,11 +406,15 @@ public partial class Main : Form
     private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         const int WM_LBUTTONDOWN = 0x0201;
+        const int WM_LBUTTONUP = 0x0202;
 
         if (nCode >= 0 && wParam == (IntPtr)WM_LBUTTONDOWN)
         {
-            var hookStruct = Marshal.PtrToStructure<NativeMethods.MSLLHOOKSTRUCT>(lParam);
-            Logger.Info($"捕获全局左键点击: x={hookStruct.pt.x}, y={hookStruct.pt.y}");
+            StartMouseDownMove();
+        }
+        else if (nCode >= 0 && wParam == (IntPtr)WM_LBUTTONUP)
+        {
+            StopMouseDownMove();
         }
 
         return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
@@ -390,7 +424,7 @@ public partial class Main : Form
     {
         public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
 
-        #pragma warning disable CS0649 // 字段由 Win32 填充，代码中不直接赋值
+#pragma warning disable CS0649 // 字段由 Win32 填充，代码中不直接赋值
         public struct POINT
         {
             public int x;
@@ -405,7 +439,7 @@ public partial class Main : Form
             public int time;
             public IntPtr dwExtraInfo;
         }
-        #pragma warning restore CS0649
+#pragma warning restore CS0649
 
         private const int WH_MOUSE_LL = 14;
 
