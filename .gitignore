@@ -2,4 +2,6 @@
 /obj
 /bin
 /Logs
+/YoloTrain/datasets
+/YoloTrain/runs
 
