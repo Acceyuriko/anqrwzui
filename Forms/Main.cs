@@ -25,6 +25,8 @@ public partial class Main : Form
     private NativeMethods.LowLevelMouseProc? _mouseProc;
     private readonly MouseController _mouseController = new MouseController();
     private CancellationTokenSource? _mouseMoveCts;
+    private IntPtr _keyboardHookId = IntPtr.Zero;
+    private NativeMethods.LowLevelKeyboardProc? _keyboardProc;
 
     public Main()
     {
@@ -33,6 +35,7 @@ public partial class Main : Form
         InitializeCaptureComponents();
         InitializeDetection();
         SetupGlobalMouseHook();
+        SetupGlobalKeyboardHook();
         Logger.Info("应用程序初始化完成");
     }
 
@@ -364,6 +367,7 @@ public partial class Main : Form
         _yoloDetector?.Dispose();
         StopMouseDownMove();
         ReleaseGlobalMouseHook();
+        ReleaseGlobalKeyboardHook();
 
         base.OnFormClosing(e);
 
@@ -403,6 +407,31 @@ public partial class Main : Form
         _mouseProc = null;
     }
 
+    private void SetupGlobalKeyboardHook()
+    {
+        _keyboardProc = KeyboardHookCallback;
+        _keyboardHookId = NativeMethods.SetKeyboardHook(_keyboardProc);
+        if (_keyboardHookId == IntPtr.Zero)
+        {
+            Logger.Error("全局键盘钩子设置失败");
+        }
+        else
+        {
+            Logger.Info("全局键盘钩子已启动");
+        }
+    }
+
+    private void ReleaseGlobalKeyboardHook()
+    {
+        if (_keyboardHookId != IntPtr.Zero)
+        {
+            NativeMethods.UnhookWindowsHookEx(_keyboardHookId);
+            _keyboardHookId = IntPtr.Zero;
+            Logger.Info("全局键盘钩子已释放");
+        }
+        _keyboardProc = null;
+    }
+
     private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         const int WM_LBUTTONDOWN = 0x0201;
@@ -420,9 +449,33 @@ public partial class Main : Form
         return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
     }
 
+    private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        const int WM_KEYDOWN = 0x0100;
+        const int WM_KEYUP = 0x0101;
+
+        if (nCode >= 0)
+        {
+            var vkCode = Marshal.ReadInt32(lParam);
+            var key = (Keys)vkCode;
+
+            if (wParam == (IntPtr)WM_KEYDOWN)
+            {
+                Logger.Debug($"键盘按下: {key}");
+            }
+            else if (wParam == (IntPtr)WM_KEYUP)
+            {
+                Logger.Debug($"键盘抬起: {key}");
+            }
+        }
+
+        return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+    }
+
     private static class NativeMethods
     {
         public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+        public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
 #pragma warning disable CS0649 // 字段由 Win32 填充，代码中不直接赋值
         public struct POINT
@@ -439,12 +492,25 @@ public partial class Main : Form
             public int time;
             public IntPtr dwExtraInfo;
         }
+
+        public struct KBDLLHOOKSTRUCT
+        {
+            public int vkCode;
+            public int scanCode;
+            public int flags;
+            public int time;
+            public IntPtr dwExtraInfo;
+        }
 #pragma warning restore CS0649
 
         private const int WH_MOUSE_LL = 14;
+        private const int WH_KEYBOARD_LL = 13;
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -462,6 +528,14 @@ public partial class Main : Form
             using var curModule = curProcess.MainModule!;
             var handle = GetModuleHandle(curModule.ModuleName);
             return SetWindowsHookEx(WH_MOUSE_LL, proc, handle, 0);
+        }
+
+        public static IntPtr SetKeyboardHook(LowLevelKeyboardProc proc)
+        {
+            using var curProcess = Process.GetCurrentProcess();
+            using var curModule = curProcess.MainModule!;
+            var handle = GetModuleHandle(curModule.ModuleName);
+            return SetWindowsHookEx(WH_KEYBOARD_LL, proc, handle, 0);
         }
     }
 }

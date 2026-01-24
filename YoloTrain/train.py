@@ -9,7 +9,7 @@ DATA_YAML = os.path.join(DATASET_DIR, "data.yaml")  # 确保定义 train/val/tes
 
 # 从零开始训练配置（使用模型结构 yaml，而非预训练权重）
 MODEL_CFG = "yolov8n.yaml"  # 或自定义 yaml
-OUTPUT_DIR = "./runs/train"
+OUTPUT_DIR = "."
 
 def main():
     # 创建模型（从零开始，不加载预训练权重）
