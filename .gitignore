@@ -3,5 +3,5 @@
 /bin
 /Logs
 /YoloTrain/datasets
-/YoloTrain/runs
+/YoloTrain/exp
 
