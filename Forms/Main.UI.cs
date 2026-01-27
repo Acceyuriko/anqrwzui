@@ -1,3 +1,6 @@
+using System.IO;
+using System.Text.Json;
+
 namespace anqrwzui;
 
 public partial class Main
@@ -56,6 +59,8 @@ public partial class Main
         this.Controls.Add(panel);
         this.Controls.SetChildIndex(panel, 0);
 
+        LoadSelectionState();
+
         Logger.Debug("截取组件初始化完成");
     }
 
@@ -65,6 +70,11 @@ public partial class Main
         _firstSecondaryCombo = CreateSecondaryComboBox();
         _secondPrimaryCombo = CreatePrimaryComboBox();
         _secondSecondaryCombo = CreateSecondaryComboBox();
+
+        AttachHotkeySuppress(_firstPrimaryCombo);
+        AttachHotkeySuppress(_firstSecondaryCombo);
+        AttachHotkeySuppress(_secondPrimaryCombo);
+        AttachHotkeySuppress(_secondSecondaryCombo);
 
         panel.Controls.AddRange(new Control[]
         {
@@ -121,6 +131,25 @@ public partial class Main
             primaryCombo.Items.Add(key);
         }
         primaryCombo.EndUpdate();
+    }
+
+    private void AttachHotkeySuppress(ComboBox? combo)
+    {
+        if (combo == null)
+        {
+            return;
+        }
+
+        combo.KeyDown += SuppressHotkeyOnCombo;
+    }
+
+    private void SuppressHotkeyOnCombo(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.D1 or Keys.NumPad1 or Keys.D2 or Keys.NumPad2 or Keys.D3 or Keys.NumPad3)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+        }
     }
 
     private void UpdateSecondaryOptions(ComboBox? primaryCombo, ComboBox? secondaryCombo)
@@ -189,5 +218,82 @@ public partial class Main
         }
 
         UpdateSecondaryOptions(primaryCombo, secondaryCombo, previousSecondary);
+    }
+
+    private void LoadSelectionState()
+    {
+        try
+        {
+            if (!File.Exists(_selectionStatePath))
+            {
+                return;
+            }
+
+            var json = File.ReadAllText(_selectionStatePath);
+            var state = JsonSerializer.Deserialize<SelectionState>(json);
+            if (state == null)
+            {
+                return;
+            }
+
+            ApplySelection(_firstPrimaryCombo, _firstSecondaryCombo, state.FirstPrimary, state.FirstSecondary);
+            ApplySelection(_secondPrimaryCombo, _secondSecondaryCombo, state.SecondPrimary, state.SecondSecondary);
+            Logger.Info("已恢复上次的下拉选项");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"恢复上次选择失败: {ex.Message}");
+        }
+    }
+
+    private void ApplySelection(ComboBox? primaryCombo, ComboBox? secondaryCombo, string? primaryValue, string? secondaryValue)
+    {
+        if (primaryCombo == null || secondaryCombo == null)
+        {
+            return;
+        }
+
+        if (primaryValue != null && primaryCombo.Items.Contains(primaryValue))
+        {
+            primaryCombo.SelectedItem = primaryValue;
+        }
+
+        UpdateSecondaryOptions(primaryCombo, secondaryCombo, secondaryValue);
+    }
+
+    private void SaveSelectionState()
+    {
+        try
+        {
+            var state = new SelectionState
+            {
+                FirstPrimary = _firstPrimaryCombo?.SelectedItem as string,
+                FirstSecondary = _firstSecondaryCombo?.SelectedItem as string,
+                SecondPrimary = _secondPrimaryCombo?.SelectedItem as string,
+                SecondSecondary = _secondSecondaryCombo?.SelectedItem as string
+            };
+
+            var dir = Path.GetDirectoryName(_selectionStatePath);
+            if (!string.IsNullOrEmpty(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(_selectionStatePath, json);
+            Logger.Info("已保存当前下拉选项");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"保存下拉选项失败: {ex.Message}");
+        }
+    }
+
+    private class SelectionState
+    {
+        public string? FirstPrimary { get; set; }
+        public string? FirstSecondary { get; set; }
+        public string? SecondPrimary { get; set; }
+        public string? SecondSecondary { get; set; }
     }
 }

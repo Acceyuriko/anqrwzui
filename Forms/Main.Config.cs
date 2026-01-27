@@ -11,6 +11,12 @@ public partial class Main
         _configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config", "config.json");
     }
 
+    private void InitializeSelectionStatePath()
+    {
+        var configDir = Path.GetDirectoryName(_configPath);
+        _selectionStatePath = Path.Combine(configDir ?? AppDomain.CurrentDomain.BaseDirectory, "last_selection.json");
+    }
+
     private void EnsureConfigFileExists()
     {
         try
@@ -28,10 +34,10 @@ public partial class Main
 
             var defaultConfig = new Dictionary<string, Dictionary<string, double>>
             {
-                ["default"] = new() { ["1"] = 10.0, ["2"] = 20.0, ["3"] = 30.0, ["4"] = 40.0 },
-                ["m416"] = new() { ["1"] = 10.0, ["2"] = 20.0, ["3"] = 30.0, ["4"] = 40.0 },
-                ["aks"] = new() { ["1"] = 12.0, ["2"] = 22.0, ["3"] = 32.0, ["4"] = 42.0 },
-                ["ump"] = new() { ["1"] = 14.0, ["2"] = 24.0, ["3"] = 34.0, ["4"] = 44.0 }
+                ["default"] = new() { ["1"] = 0, ["2"] = 0, ["3"] = 0, ["4"] = 0 },
+                ["m416"] = new() { ["1"] = 1.0, ["2"] = 2.0, ["3"] = 3.0, ["4"] = 4.0 },
+                ["aks"] = new() { ["1"] = 2.0, ["2"] = 4.0, ["3"] = 6.0, ["4"] = 8.0 },
+                ["ump"] = new() { ["1"] = 0.5, ["2"] = 1.0, ["3"] = 1.5, ["4"] = 2.0 }
             };
 
             var json = JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions { WriteIndented = true });

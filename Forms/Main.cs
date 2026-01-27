@@ -10,6 +10,7 @@ public partial class Main : Form
         Logger.Info("应用程序启动");
         InitializeComponent();
         InitializeConfigPath();
+        InitializeSelectionStatePath();
         EnsureConfigFileExists();
         LoadConfigOptions();
         InitializeCaptureComponents();
@@ -27,6 +28,7 @@ public partial class Main : Form
         StopCapture();
         _yoloDetector?.Dispose();
         StopMouseDownMove();
+        SaveSelectionState();
         ReleaseGlobalMouseHook();
         ReleaseGlobalKeyboardHook();
         DisposeConfigWatcher();
