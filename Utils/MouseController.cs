@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
 
 namespace anqrwzui
 {
@@ -117,6 +118,11 @@ namespace anqrwzui
         if (!_deviceReady)
         {
           Logger.Warning("无法打开鼠标控制设备，将回退到 SendInput");
+          if (!ConfirmUseSendInput("无法打开鼠标控制设备"))
+          {
+            ExitApplication();
+            return;
+          }
         }
         else
         {
@@ -138,7 +144,25 @@ namespace anqrwzui
       {
         _deviceReady = false;
         Logger.Error("初始化鼠标控制器失败，将回退到 SendInput", ex);
+        if (!ConfirmUseSendInput("初始化鼠标控制器失败"))
+        {
+          ExitApplication();
+          return;
+        }
       }
+    }
+
+    private static bool ConfirmUseSendInput(string reason)
+    {
+      var message = $"{reason}。是否继续使用 SendInput 方式？";
+      var result = MessageBox.Show(message, "设备初始化失败", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+      return result == DialogResult.Yes;
+    }
+
+    private static void ExitApplication()
+    {
+      Application.Exit();
+      Environment.Exit(0);
     }
 
     public void MoveRelative(int dx, int dy)
@@ -149,6 +173,11 @@ namespace anqrwzui
         if (code == 0)
         {
           Logger.Error("设备相对移动失败，回退 SendInput");
+          if (!ConfirmUseSendInput("设备相对移动失败"))
+          {
+            ExitApplication();
+            return;
+          }
           SendInputMove(dx, dy);
         }
       }

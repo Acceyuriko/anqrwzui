@@ -9,6 +9,14 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <AssemblyName>chrome</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <ApplicationIcon>Assets/Logo.ico</ApplicationIcon>
+  </PropertyGroup>
+
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
     <DefineConstants>DEBUG</DefineConstants>
   </PropertyGroup>

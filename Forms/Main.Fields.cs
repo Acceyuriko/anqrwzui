@@ -33,6 +33,10 @@ public partial class Main
     private ComboBox? _firstSecondaryCombo;
     private ComboBox? _secondPrimaryCombo;
     private ComboBox? _secondSecondaryCombo;
+    private FlowLayoutPanel? _firstComboGroupPanel;
+    private FlowLayoutPanel? _secondComboGroupPanel;
+    private Label? _activeComboLabel;
+    private int _activeComboGroup = 1;
     private Dictionary<string, Dictionary<string, double>> _configOptions = new();
     private string _configPath = string.Empty;
     private string _selectionStatePath = string.Empty;

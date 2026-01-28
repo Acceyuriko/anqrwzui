@@ -12,6 +12,7 @@ public partial class Main
         this.Text = "Anqrwzui";
         this.ClientSize = new Size(800, 600);
         this.StartPosition = FormStartPosition.CenterScreen;
+        this.TopMost = true;
 
         _pictureBox = new PictureBox
         {
@@ -54,7 +55,15 @@ public partial class Main
             Margin = new Padding(0, 6, 0, 0)
         };
 
-        panel.Controls.AddRange(new Control[] { _toggleCaptureButton, _deviceLabel, _fpsLabel });
+        _activeComboLabel = new Label
+        {
+            Text = "当前: 1",
+            AutoSize = true,
+            ForeColor = Color.DarkGreen,
+            Margin = new Padding(10, 6, 12, 0)
+        };
+
+        panel.Controls.AddRange(new Control[] { _toggleCaptureButton, _deviceLabel, _fpsLabel, _activeComboLabel });
         InitializeConfigSelectors(panel);
         this.Controls.Add(panel);
         this.Controls.SetChildIndex(panel, 0);
@@ -71,14 +80,20 @@ public partial class Main
         _secondPrimaryCombo = CreatePrimaryComboBox();
         _secondSecondaryCombo = CreateSecondaryComboBox();
 
+        _firstComboGroupPanel = CreateComboGroupPanel();
+        _secondComboGroupPanel = CreateComboGroupPanel();
+
         AttachHotkeySuppress(_firstPrimaryCombo);
         AttachHotkeySuppress(_firstSecondaryCombo);
         AttachHotkeySuppress(_secondPrimaryCombo);
         AttachHotkeySuppress(_secondSecondaryCombo);
 
+        _firstComboGroupPanel.Controls.AddRange(new Control[] { _firstPrimaryCombo!, _firstSecondaryCombo! });
+        _secondComboGroupPanel.Controls.AddRange(new Control[] { _secondPrimaryCombo!, _secondSecondaryCombo! });
+
         panel.Controls.AddRange(new Control[]
         {
-            _firstPrimaryCombo!, _firstSecondaryCombo!, _secondPrimaryCombo!, _secondSecondaryCombo!
+            _firstComboGroupPanel, _secondComboGroupPanel
         });
 
         PopulatePrimaryOptions(_firstPrimaryCombo);
@@ -98,6 +113,8 @@ public partial class Main
             _secondPrimaryCombo.SelectedIndex = 0;
             UpdateSecondaryOptions(_secondPrimaryCombo, _secondSecondaryCombo);
         }
+
+        SetActiveComboGroup(1);
     }
 
     private ComboBox CreatePrimaryComboBox()
@@ -117,6 +134,17 @@ public partial class Main
             DropDownStyle = ComboBoxStyle.DropDownList,
             Width = 90,
             Margin = new Padding(6, 2, 0, 0)
+        };
+    }
+
+    private FlowLayoutPanel CreateComboGroupPanel()
+    {
+        return new FlowLayoutPanel
+        {
+            AutoSize = true,
+            WrapContents = false,
+            FlowDirection = FlowDirection.LeftToRight,
+            Margin = new Padding(0, 0, 12, 0)
         };
     }
 
@@ -149,6 +177,39 @@ public partial class Main
         {
             e.Handled = true;
             e.SuppressKeyPress = true;
+        }
+    }
+
+    private void SetActiveComboGroup(int groupIndex)
+    {
+        _activeComboGroup = groupIndex switch
+        {
+            2 => 2,
+            1 => 1,
+            _ => 0
+        };
+
+        if (_firstComboGroupPanel != null)
+        {
+            _firstComboGroupPanel.Visible = _activeComboGroup == 1;
+        }
+
+        if (_secondComboGroupPanel != null)
+        {
+            _secondComboGroupPanel.Visible = _activeComboGroup == 2;
+        }
+
+        if (_activeComboLabel != null)
+        {
+            if (_activeComboGroup == 0)
+            {
+                _activeComboLabel.Visible = false;
+            }
+            else
+            {
+                _activeComboLabel.Visible = true;
+                _activeComboLabel.Text = $"当前: {_activeComboGroup}";
+            }
         }
     }
 

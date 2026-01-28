@@ -4,200 +4,283 @@ namespace anqrwzui;
 
 public partial class Main
 {
-    private void StartMouseDownMove()
-    {
-        if (_mouseMoveCts != null)
-            return;
+  private void StartMouseDownMove()
+  {
+    if (_mouseMoveCts != null)
+      return;
 
-        _mouseMoveCts = new CancellationTokenSource();
-        var token = _mouseMoveCts.Token;
-        Task.Run(async () =>
+    _mouseMoveCts = new CancellationTokenSource();
+    var token = _mouseMoveCts.Token;
+    Task.Run(async () =>
+    {
+      try
+      {
+        while (!token.IsCancellationRequested)
         {
-            try
+          var step = Volatile.Read(ref _downMovePixels);
+          if (step != 0.0)
+          {
+            var intervalSeconds = MouseMoveIntervalMs / 1000.0;
+
+            var sineNoise = NoiseAmplitudePixels * Math.Sin(2 * Math.PI * _noisePhase);
+            var randomNudge = (_rand.NextDouble() - 0.5) * 0.2;
+            _noisePhase += NoiseFrequencyHz * intervalSeconds;
+
+            _moveAccumulator += step + sineNoise + randomNudge;
+            var movePixels = (int)Math.Round(_moveAccumulator);
+
+            var sineNoiseX = HorizontalNoiseAmplitudePixels * Math.Sin(2 * Math.PI * _noisePhaseX);
+            var randomNudgeX = (_rand.NextDouble() - 0.5) * 0.2;
+            _noisePhaseX += HorizontalNoiseFrequencyHz * intervalSeconds;
+
+            _horizontalAccumulator += sineNoiseX + randomNudgeX;
+            var movePixelsX = (int)Math.Round(_horizontalAccumulator);
+
+            if (movePixels != 0 || movePixelsX != 0)
             {
-                while (!token.IsCancellationRequested)
-                {
-                    var step = Volatile.Read(ref _downMovePixels);
-                    if (step != 0.0)
-                    {
-                        var intervalSeconds = MouseMoveIntervalMs / 1000.0;
-
-                        var sineNoise = NoiseAmplitudePixels * Math.Sin(2 * Math.PI * _noisePhase);
-                        var randomNudge = (_rand.NextDouble() - 0.5) * 0.2;
-                        _noisePhase += NoiseFrequencyHz * intervalSeconds;
-
-                        _moveAccumulator += step + sineNoise + randomNudge;
-                        var movePixels = (int)Math.Round(_moveAccumulator);
-
-                        var sineNoiseX = HorizontalNoiseAmplitudePixels * Math.Sin(2 * Math.PI * _noisePhaseX);
-                        var randomNudgeX = (_rand.NextDouble() - 0.5) * 0.2;
-                        _noisePhaseX += HorizontalNoiseFrequencyHz * intervalSeconds;
-
-                        _horizontalAccumulator += sineNoiseX + randomNudgeX;
-                        var movePixelsX = (int)Math.Round(_horizontalAccumulator);
-
-                        if (movePixels != 0 || movePixelsX != 0)
-                        {
-                            _mouseController.MoveRelative(movePixelsX, movePixels);
-                            _moveAccumulator -= movePixels;
-                            _horizontalAccumulator -= movePixelsX;
-                        }
-                    }
-
-                    try { await Task.Delay(MouseMoveIntervalMs, token); } catch (TaskCanceledException) { break; }
-                }
+              _mouseController.MoveRelative(movePixelsX, movePixels);
+              _moveAccumulator -= movePixels;
+              _horizontalAccumulator -= movePixelsX;
             }
-            catch (Exception ex)
-            {
-                Logger.Error("持续鼠标下移任务异常", ex);
-            }
-        }, token);
-    }
+          }
 
-    private void StopMouseDownMove()
+          try { await Task.Delay(MouseMoveIntervalMs, token); } catch (TaskCanceledException) { break; }
+        }
+      }
+      catch (Exception ex)
+      {
+        Logger.Error("持续鼠标下移任务异常", ex);
+      }
+    }, token);
+  }
+
+  private void StopMouseDownMove()
+  {
+    _mouseMoveCts?.Cancel();
+    _mouseMoveCts?.Dispose();
+    _mouseMoveCts = null;
+  }
+
+  private void EvaluateMouseMoveState()
+  {
+    var shouldMove = _isLeftButtonDown && _isRightButtonDown && Volatile.Read(ref _downMovePixels) != 0.0;
+    if (shouldMove)
     {
-        _mouseMoveCts?.Cancel();
-        _mouseMoveCts?.Dispose();
-        _mouseMoveCts = null;
+      StartMouseDownMove();
     }
-
-    private void EvaluateMouseMoveState()
+    else
     {
-        var shouldMove = _isLeftButtonDown && _isRightButtonDown && Volatile.Read(ref _downMovePixels) != 0.0;
-        if (shouldMove)
-        {
-            StartMouseDownMove();
-        }
-        else
-        {
-            StopMouseDownMove();
-        }
+      StopMouseDownMove();
     }
+  }
 
-    private void SetDownMovePixels(double step)
+  private void SetDownMovePixels(double step)
+  {
+    Interlocked.Exchange(ref _downMovePixels, step);
+    _moveAccumulator = 0;
+    _noisePhase = 0;
+    _horizontalAccumulator = 0;
+    _noisePhaseX = 0;
+    Logger.Info($"下移步进已设置为 {step}");
+    EvaluateMouseMoveState();
+  }
+
+  private void QueueSetStepFromCombo(ComboBox? primaryCombo, ComboBox? secondaryCombo)
+  {
+    if (primaryCombo == null || secondaryCombo == null)
     {
-        Interlocked.Exchange(ref _downMovePixels, step);
-        _moveAccumulator = 0;
-        _noisePhase = 0;
-        _horizontalAccumulator = 0;
-        _noisePhaseX = 0;
-        Logger.Info($"下移步进已设置为 {step}");
-        EvaluateMouseMoveState();
+      return;
     }
 
-    private void QueueSetStepFromCombo(ComboBox? primaryCombo, ComboBox? secondaryCombo)
+    if (InvokeRequired)
     {
-        if (primaryCombo == null || secondaryCombo == null)
-        {
-            return;
-        }
-
-        if (InvokeRequired)
-        {
-            BeginInvoke(new Action(() => SetStepFromCombo(primaryCombo, secondaryCombo)));
-        }
-        else
-        {
-            SetStepFromCombo(primaryCombo, secondaryCombo);
-        }
+      BeginInvoke(new Action(() => SetStepFromCombo(primaryCombo, secondaryCombo)));
     }
-
-    private void SetStepFromCombo(ComboBox primaryCombo, ComboBox secondaryCombo)
+    else
     {
-        var value = GetConfigValueFromSelection(primaryCombo, secondaryCombo);
-        if (value.HasValue)
-        {
-            SetDownMovePixels(value.Value);
-        }
-        else
-        {
-            Logger.Warning("无法从当前选择获取下移步进值");
-        }
+      SetStepFromCombo(primaryCombo, secondaryCombo);
     }
+  }
 
-    private double? GetConfigValueFromSelection(ComboBox primaryCombo, ComboBox secondaryCombo)
+  private void SetStepFromCombo(ComboBox primaryCombo, ComboBox secondaryCombo)
+  {
+    var value = GetConfigValueFromSelection(primaryCombo, secondaryCombo);
+    if (value.HasValue)
     {
-        if (primaryCombo.SelectedItem is not string primaryKey || secondaryCombo.SelectedItem is not string secondaryKey)
-        {
-            return null;
-        }
-
-        if (_configOptions.TryGetValue(primaryKey, out var secondaryDict) && secondaryDict.TryGetValue(secondaryKey, out var value))
-        {
-            return value;
-        }
-
-        return null;
+      SetDownMovePixels(value.Value);
     }
-
-    private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    else
     {
-        const int WM_LBUTTONDOWN = 0x0201;
-        const int WM_LBUTTONUP = 0x0202;
-        const int WM_RBUTTONDOWN = 0x0204;
-        const int WM_RBUTTONUP = 0x0205;
-
-        if (nCode >= 0)
-        {
-            if (wParam == (IntPtr)WM_LBUTTONDOWN)
-            {
-                _isLeftButtonDown = true;
-            }
-            else if (wParam == (IntPtr)WM_LBUTTONUP)
-            {
-                _isLeftButtonDown = false;
-            }
-            else if (wParam == (IntPtr)WM_RBUTTONDOWN)
-            {
-                _isRightButtonDown = true;
-            }
-            else if (wParam == (IntPtr)WM_RBUTTONUP)
-            {
-                _isRightButtonDown = false;
-            }
-
-            EvaluateMouseMoveState();
-        }
-
-        return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+      Logger.Warning("无法从当前选择获取下移步进值");
     }
+  }
 
-    private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+  private double? GetConfigValueFromSelection(ComboBox primaryCombo, ComboBox secondaryCombo)
+  {
+    if (primaryCombo.SelectedItem is not string primaryKey || secondaryCombo.SelectedItem is not string secondaryKey)
     {
-        const int WM_KEYDOWN = 0x0100;
-        const int WM_KEYUP = 0x0101;
+      return null;
+    }
 
-        if (nCode >= 0)
+    if (_configOptions.TryGetValue(primaryKey, out var secondaryDict) && secondaryDict.TryGetValue(secondaryKey, out var value))
+    {
+      return value;
+    }
+
+    return null;
+  }
+
+  private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+  {
+    const int WM_LBUTTONDOWN = 0x0201;
+    const int WM_LBUTTONUP = 0x0202;
+    const int WM_RBUTTONDOWN = 0x0204;
+    const int WM_RBUTTONUP = 0x0205;
+
+    if (nCode >= 0)
+    {
+      if (wParam == (IntPtr)WM_LBUTTONDOWN)
+      {
+        _isLeftButtonDown = true;
+      }
+      else if (wParam == (IntPtr)WM_LBUTTONUP)
+      {
+        _isLeftButtonDown = false;
+      }
+      else if (wParam == (IntPtr)WM_RBUTTONDOWN)
+      {
+        _isRightButtonDown = true;
+      }
+      else if (wParam == (IntPtr)WM_RBUTTONUP)
+      {
+        _isRightButtonDown = false;
+      }
+
+      EvaluateMouseMoveState();
+    }
+
+    return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+  }
+
+  private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+  {
+    const int WM_KEYDOWN = 0x0100;
+    const int WM_KEYUP = 0x0101;
+    const int VK_CONTROL = 0x11;
+
+    if (nCode >= 0)
+    {
+      var vkCode = Marshal.ReadInt32(lParam);
+      var key = (Keys)vkCode;
+
+      if (wParam == (IntPtr)WM_KEYDOWN)
+      {
+        var ctrlDown = (NativeMethods.GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        if (ctrlDown)
         {
-            var vkCode = Marshal.ReadInt32(lParam);
-            var key = (Keys)vkCode;
+          switch (key)
+          {
+            case Keys.D1:
+            case Keys.NumPad1:
+              QueueMoveActivePrimarySelectionNext();
+              break;
+            case Keys.D2:
+            case Keys.NumPad2:
+              QueueMoveActiveSecondarySelectionNext();
+              break;
+          }
 
-            if (wParam == (IntPtr)WM_KEYDOWN)
-            {
-                Logger.Debug($"键盘按下: {key}");
-
-                switch (key)
-                {
-                    case Keys.D1:
-                    case Keys.NumPad1:
-                        QueueSetStepFromCombo(_firstPrimaryCombo, _firstSecondaryCombo);
-                        break;
-                    case Keys.D2:
-                    case Keys.NumPad2:
-                        QueueSetStepFromCombo(_secondPrimaryCombo, _secondSecondaryCombo);
-                        break;
-                    case Keys.D3:
-                    case Keys.NumPad3:
-                        SetDownMovePixels(0.0);
-                        break;
-                }
-            }
-            else if (wParam == (IntPtr)WM_KEYUP)
-            {
-                Logger.Debug($"键盘抬起: {key}");
-            }
+          return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
         }
 
-        return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+        switch (key)
+        {
+          case Keys.D1:
+          case Keys.NumPad1:
+            QueueSetStepFromCombo(_firstPrimaryCombo, _firstSecondaryCombo);
+            SetActiveComboGroup(1);
+            break;
+          case Keys.D2:
+          case Keys.NumPad2:
+            QueueSetStepFromCombo(_secondPrimaryCombo, _secondSecondaryCombo);
+            SetActiveComboGroup(2);
+            break;
+          case Keys.D3:
+          case Keys.NumPad3:
+            SetDownMovePixels(0.0);
+            SetActiveComboGroup(0);
+            break;
+        }
+      }
+      else if (wParam == (IntPtr)WM_KEYUP)
+      {
+      }
     }
+
+    return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+  }
+
+  private void QueueMoveActivePrimarySelectionNext()
+  {
+    if (InvokeRequired)
+    {
+      BeginInvoke(new Action(MoveActivePrimarySelectionNext));
+    }
+    else
+    {
+      MoveActivePrimarySelectionNext();
+    }
+  }
+
+  private void QueueMoveActiveSecondarySelectionNext()
+  {
+    if (InvokeRequired)
+    {
+      BeginInvoke(new Action(MoveActiveSecondarySelectionNext));
+    }
+    else
+    {
+      MoveActiveSecondarySelectionNext();
+    }
+  }
+
+  private void MoveActivePrimarySelectionNext()
+  {
+    var combo = _activeComboGroup switch
+    {
+      1 => _firstPrimaryCombo,
+      2 => _secondPrimaryCombo,
+      _ => null
+    };
+
+    MoveComboSelectionNext(combo);
+  }
+
+  private void MoveActiveSecondarySelectionNext()
+  {
+    var combo = _activeComboGroup switch
+    {
+      1 => _firstSecondaryCombo,
+      2 => _secondSecondaryCombo,
+      _ => null
+    };
+
+    MoveComboSelectionNext(combo);
+  }
+
+  private void MoveComboSelectionNext(ComboBox? combo)
+  {
+    if (combo == null || combo.Items.Count == 0)
+    {
+      return;
+    }
+
+    if (combo.SelectedIndex < 0)
+    {
+      combo.SelectedIndex = 0;
+      return;
+    }
+
+    combo.SelectedIndex = (combo.SelectedIndex + 1) % combo.Items.Count;
+  }
 }
