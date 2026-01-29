@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Drawing.Drawing2D;
 using System.Linq;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
@@ -12,7 +13,7 @@ namespace anqrwzui
   {
     private InferenceSession? _session;
     private bool _isDisposed = false;
-    private readonly string[] _classNames = { "person", "head" };
+    private readonly string[] _classNames = { "head" };
     private readonly float _confidenceThreshold = 0.25f;
     private readonly float _iouThreshold = 0.45f;
     private readonly int _inputSize = 640;
@@ -34,6 +35,11 @@ namespace anqrwzui
       _tensor = new DenseTensor<float>(_tensorBuffer, new[] { 1, 3, _inputSize, _inputSize });
       _preprocessBitmap = new Bitmap(_inputSize, _inputSize, PixelFormat.Format24bppRgb);
       _preprocessGraphics = Graphics.FromImage(_preprocessBitmap);
+      _preprocessGraphics.CompositingMode = CompositingMode.SourceCopy;
+      _preprocessGraphics.CompositingQuality = CompositingQuality.HighSpeed;
+      _preprocessGraphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+      _preprocessGraphics.SmoothingMode = SmoothingMode.None;
+      _preprocessGraphics.PixelOffsetMode = PixelOffsetMode.HighSpeed;
     }
 
     private void Initialize(string modelPath)
@@ -153,33 +159,35 @@ namespace anqrwzui
 
     private List<DetectionResult> Postprocess(Tensor<float> output, int originalWidth, int originalHeight)
     {
-      var results = new List<DetectionResult>();
+      var results = new List<DetectionResult>(64);
 
       try
       {
-        // YOLOv8输出格式: [1, 84, n] 或 [1, n, 84]
+        // YOLOv8输出格式: [1, C, N] 或 [1, N, C]
         var dims = output.Dimensions;
-        int dim0 = dims[0];
         int dim1 = dims[1];
         int dim2 = dims.Length > 2 ? dims[2] : 0;
 
         // 处理不同的输出格式
         int numDetections;
         int featuresPerDetection;
+        bool channelsFirst;
 
         if (dims.Length == 3)
         {
-          if (dim1 == 84) // [1, 84, n]
+          if (dim1 == dim2)
           {
-            numDetections = dim2;
-            featuresPerDetection = dim1;
-          }
-          else if (dim2 == 84) // [1, n, 84]
-          {
-            numDetections = dim1;
-            featuresPerDetection = dim2;
+            channelsFirst = true;
           }
           else
+          {
+            channelsFirst = dim1 < dim2; // 通常 C << N
+          }
+
+          featuresPerDetection = channelsFirst ? dim1 : dim2;
+          numDetections = channelsFirst ? dim2 : dim1;
+
+          if (featuresPerDetection < 5)
           {
             Logger.Error($"不支持的输出格式: [1, {dim1}, {dim2}]");
             return results;
@@ -192,19 +200,33 @@ namespace anqrwzui
         }
 
         // 解析检测结果
+        var scaleX = (float)originalWidth / _inputSize;
+        var scaleY = (float)originalHeight / _inputSize;
+
+        if (numDetections > 0)
+        {
+          results.Capacity = Math.Max(results.Capacity, numDetections);
+        }
+
         for (int i = 0; i < numDetections; i++)
         {
           // YOLOv8 默认输出: 前4个是 bbox，后面是每类置信度；有些导出会在第5位带 objectness。
           // 自适应判断是否包含 objectness。
           int classCountNoObj = featuresPerDetection - 4;
           int classCountWithObj = featuresPerDetection - 5;
-          bool hasObjectness = classCountWithObj > 0 && (featuresPerDetection == 85 || featuresPerDetection == 7 || classCountWithObj == _classNames.Length);
+          bool hasObjectness = classCountWithObj > 0 &&
+                               (featuresPerDetection == 85 || featuresPerDetection == 7 || classCountWithObj == _classNames.Length);
           int classStart = hasObjectness ? 5 : 4;
           int classCount = hasObjectness ? classCountWithObj : classCountNoObj;
+          classCount = Math.Min(classCount, _classNames.Length);
+          if (classCount <= 0)
+          {
+            continue;
+          }
 
           float x_center, y_center, width, height, objectness;
 
-          if (dim1 == featuresPerDetection) // [1, C, n]
+          if (channelsFirst) // [1, C, n]
           {
             x_center = output[0, 0, i];
             y_center = output[0, 1, i];
@@ -229,7 +251,7 @@ namespace anqrwzui
           {
             int idx = classStart + j;
             float score;
-            if (dim1 == featuresPerDetection)
+            if (channelsFirst)
               score = output[0, idx, i];
             else
               score = output[0, i, idx];
@@ -253,10 +275,6 @@ namespace anqrwzui
           var y1 = y_center - height / 2;
           var x2 = x_center + width / 2;
           var y2 = y_center + height / 2;
-
-          // 映射回原始图像尺寸
-          var scaleX = (float)originalWidth / _inputSize;
-          var scaleY = (float)originalHeight / _inputSize;
 
           var rect = new RectangleF(
               x1 * scaleX,
@@ -292,21 +310,21 @@ namespace anqrwzui
       if (detections.Count == 0)
         return detections;
 
-      var sorted = detections.OrderByDescending(d => d.Confidence).ToList();
-      int n = sorted.Count;
+      detections.Sort((a, b) => b.Confidence.CompareTo(a.Confidence));
+      int n = detections.Count;
       var suppressed = new bool[n];
       var results = new List<DetectionResult>(n);
 
       for (int i = 0; i < n; i++)
       {
         if (suppressed[i]) continue;
-        var current = sorted[i];
+        var current = detections[i];
         results.Add(current);
 
         for (int j = i + 1; j < n; j++)
         {
           if (suppressed[j]) continue;
-          var iou = CalculateIOU(current.BoundingBox, sorted[j].BoundingBox);
+          var iou = CalculateIOU(current.BoundingBox, detections[j].BoundingBox);
           if (iou > _iouThreshold)
           {
             suppressed[j] = true;
@@ -319,12 +337,19 @@ namespace anqrwzui
 
     private float CalculateIOU(RectangleF rect1, RectangleF rect2)
     {
-      var intersection = RectangleF.Intersect(rect1, rect2);
-      if (intersection.IsEmpty)
+      var x1 = Math.Max(rect1.Left, rect2.Left);
+      var y1 = Math.Max(rect1.Top, rect2.Top);
+      var x2 = Math.Min(rect1.Right, rect2.Right);
+      var y2 = Math.Min(rect1.Bottom, rect2.Bottom);
+
+      var interW = x2 - x1;
+      var interH = y2 - y1;
+      if (interW <= 0 || interH <= 0)
         return 0;
 
-      var union = rect1.Width * rect1.Height + rect2.Width * rect2.Height - intersection.Width * intersection.Height;
-      return intersection.Width * intersection.Height / union;
+      var interArea = interW * interH;
+      var union = rect1.Width * rect1.Height + rect2.Width * rect2.Height - interArea;
+      return interArea / union;
     }
 
     public void Dispose()

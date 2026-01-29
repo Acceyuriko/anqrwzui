@@ -25,12 +25,13 @@ def main():
         project=OUTPUT_DIR,
         name="exp",
         device=0,   # CUDA:0，若无GPU则改为 "cpu"
+        amp=True,   # 自动混合精度(AMP)，加速训练
     )
 
     # 训练完成后导出 ONNX
     best_pt = os.path.join(model.trainer.save_dir, "weights", "best.pt")
     model = YOLO(best_pt)
-    model.export(format="onnx", opset=12, simplify=True, dynamic=False)
+    model.export(format="onnx", opset=12, simplify=True, dynamic=False, half=True)
 
 if __name__ == "__main__":
     main()

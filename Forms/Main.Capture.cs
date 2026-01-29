@@ -10,7 +10,7 @@ public partial class Main
 
         try
         {
-            var modelPath = @"Model\yolov8n.onnx";
+            var modelPath = @"Model\best.onnx";
             _yoloDetector = new YoloV8Detector(modelPath, UpdateDeviceLabel);
             Logger.Info("目标检测初始化成功");
         }
