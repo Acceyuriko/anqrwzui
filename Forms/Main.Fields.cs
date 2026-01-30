@@ -29,15 +29,13 @@ public partial class Main
     private CancellationTokenSource? _mouseMoveCts;
     private IntPtr _keyboardHookId = IntPtr.Zero;
     private NativeMethods.LowLevelKeyboardProc? _keyboardProc;
-    private ComboBox? _firstPrimaryCombo;
-    private ComboBox? _firstSecondaryCombo;
-    private ComboBox? _secondPrimaryCombo;
-    private ComboBox? _secondSecondaryCombo;
+    private FlowLayoutPanel? _firstOptionGroupPanel;
+    private FlowLayoutPanel? _secondOptionGroupPanel;
     private FlowLayoutPanel? _firstComboGroupPanel;
     private FlowLayoutPanel? _secondComboGroupPanel;
     private Label? _activeComboLabel;
     private int _activeComboGroup = 1;
-    private Dictionary<string, Dictionary<string, double>> _configOptions = new();
+    private List<ConfigOption> _configOptions = new();
     private string _configPath = string.Empty;
     private string _selectionStatePath = string.Empty;
     private FileSystemWatcher? _configWatcher;
@@ -55,4 +53,16 @@ public partial class Main
     private const double HorizontalNoiseAmplitudePixels = 0.1;
     private const double HorizontalNoiseFrequencyHz = 3;
     private readonly Random _rand = new();
+
+    private sealed class ConfigOption
+    {
+        public ConfigOption(string key, double value)
+        {
+            Key = key;
+            Value = value;
+        }
+
+        public string Key { get; }
+        public double Value { get; }
+    }
 }

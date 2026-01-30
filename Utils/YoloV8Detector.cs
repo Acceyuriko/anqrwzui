@@ -14,7 +14,7 @@ namespace anqrwzui
     private InferenceSession? _session;
     private bool _isDisposed = false;
     private readonly string[] _classNames = { "head" };
-    private readonly float _confidenceThreshold = 0.25f;
+    private readonly float _confidenceThreshold = 0.45f;
     private readonly float _iouThreshold = 0.45f;
     private readonly int _inputSize = 640;
     private readonly string _inputName;

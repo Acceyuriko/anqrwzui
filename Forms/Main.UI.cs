@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace anqrwzui;
@@ -20,16 +21,43 @@ public partial class Main
             Dock = DockStyle.Fill,
             BackColor = Color.Black
         };
-        this.Controls.Add(_pictureBox);
 
-        var panel = new FlowLayoutPanel
+        var mainLayout = new TableLayoutPanel
         {
-            Dock = DockStyle.Top,
-            Height = 52,
+            Dock = DockStyle.Fill,
             BackColor = Color.LightGray,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
+            ColumnCount = 2,
+            RowCount = 1,
             Padding = new Padding(10, 8, 10, 8)
+        };
+        mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30f));
+        mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70f));
+
+        var rightLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = Color.LightGray
+        };
+        rightLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+
+        var leftLayout = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoScroll = true,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Margin = new Padding(0, 0, 0, 0)
+        };
+
+        var rightTopRow = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Margin = new Padding(0)
         };
 
         _toggleCaptureButton = new Button
@@ -63,10 +91,18 @@ public partial class Main
             Margin = new Padding(10, 6, 12, 0)
         };
 
-        panel.Controls.AddRange(new Control[] { _toggleCaptureButton, _deviceLabel, _fpsLabel, _activeComboLabel });
-        InitializeConfigSelectors(panel);
-        this.Controls.Add(panel);
-        this.Controls.SetChildIndex(panel, 0);
+        rightTopRow.Controls.AddRange(new Control[] { _toggleCaptureButton, _deviceLabel, _fpsLabel });
+        leftLayout.Controls.Add(_activeComboLabel);
+
+        rightLayout.Controls.Add(rightTopRow, 0, 0);
+        rightLayout.Controls.Add(_pictureBox, 0, 1);
+
+        mainLayout.Controls.Add(leftLayout, 0, 0);
+        mainLayout.Controls.Add(rightLayout, 1, 0);
+
+        InitializeConfigSelectors(leftLayout);
+        this.Controls.Add(mainLayout);
+        this.Controls.SetChildIndex(mainLayout, 0);
 
         LoadSelectionState();
 
@@ -75,66 +111,23 @@ public partial class Main
 
     private void InitializeConfigSelectors(FlowLayoutPanel panel)
     {
-        _firstPrimaryCombo = CreatePrimaryComboBox();
-        _firstSecondaryCombo = CreateSecondaryComboBox();
-        _secondPrimaryCombo = CreatePrimaryComboBox();
-        _secondSecondaryCombo = CreateSecondaryComboBox();
-
         _firstComboGroupPanel = CreateComboGroupPanel();
         _secondComboGroupPanel = CreateComboGroupPanel();
+        _firstOptionGroupPanel = CreateOptionGroupPanel(1);
+        _secondOptionGroupPanel = CreateOptionGroupPanel(2);
 
-        AttachHotkeySuppress(_firstPrimaryCombo);
-        AttachHotkeySuppress(_firstSecondaryCombo);
-        AttachHotkeySuppress(_secondPrimaryCombo);
-        AttachHotkeySuppress(_secondSecondaryCombo);
-
-        _firstComboGroupPanel.Controls.AddRange(new Control[] { _firstPrimaryCombo!, _firstSecondaryCombo! });
-        _secondComboGroupPanel.Controls.AddRange(new Control[] { _secondPrimaryCombo!, _secondSecondaryCombo! });
+        _firstComboGroupPanel.Controls.Add(_firstOptionGroupPanel);
+        _secondComboGroupPanel.Controls.Add(_secondOptionGroupPanel);
 
         panel.Controls.AddRange(new Control[]
         {
             _firstComboGroupPanel, _secondComboGroupPanel
         });
 
-        PopulatePrimaryOptions(_firstPrimaryCombo);
-        PopulatePrimaryOptions(_secondPrimaryCombo);
-
-        _firstPrimaryCombo.SelectedIndexChanged += (_, _) => UpdateSecondaryOptions(_firstPrimaryCombo, _firstSecondaryCombo);
-        _secondPrimaryCombo.SelectedIndexChanged += (_, _) => UpdateSecondaryOptions(_secondPrimaryCombo, _secondSecondaryCombo);
-
-        if (_firstPrimaryCombo.Items.Count > 0)
-        {
-            _firstPrimaryCombo.SelectedIndex = 0;
-            UpdateSecondaryOptions(_firstPrimaryCombo, _firstSecondaryCombo);
-        }
-
-        if (_secondPrimaryCombo.Items.Count > 0)
-        {
-            _secondPrimaryCombo.SelectedIndex = 0;
-            UpdateSecondaryOptions(_secondPrimaryCombo, _secondSecondaryCombo);
-        }
+        PopulateOptionGroup(_firstOptionGroupPanel, 1, null);
+        PopulateOptionGroup(_secondOptionGroupPanel, 2, null);
 
         SetActiveComboGroup(1);
-    }
-
-    private ComboBox CreatePrimaryComboBox()
-    {
-        return new ComboBox
-        {
-            DropDownStyle = ComboBoxStyle.DropDownList,
-            Width = 120,
-            Margin = new Padding(8, 2, 0, 0)
-        };
-    }
-
-    private ComboBox CreateSecondaryComboBox()
-    {
-        return new ComboBox
-        {
-            DropDownStyle = ComboBoxStyle.DropDownList,
-            Width = 90,
-            Margin = new Padding(6, 2, 0, 0)
-        };
     }
 
     private FlowLayoutPanel CreateComboGroupPanel()
@@ -143,41 +136,22 @@ public partial class Main
         {
             AutoSize = true,
             WrapContents = false,
-            FlowDirection = FlowDirection.LeftToRight,
-            Margin = new Padding(0, 0, 12, 0)
+            FlowDirection = FlowDirection.TopDown,
+            Margin = new Padding(0, 8, 0, 8)
         };
     }
 
-    private void PopulatePrimaryOptions(ComboBox? primaryCombo)
+    private FlowLayoutPanel CreateOptionGroupPanel(int groupIndex)
     {
-        if (primaryCombo == null) return;
-
-        primaryCombo.BeginUpdate();
-        primaryCombo.Items.Clear();
-        foreach (var key in _configOptions.Keys.OrderBy(k => k))
+        var panel = new FlowLayoutPanel
         {
-            primaryCombo.Items.Add(key);
-        }
-        primaryCombo.EndUpdate();
-    }
-
-    private void AttachHotkeySuppress(ComboBox? combo)
-    {
-        if (combo == null)
-        {
-            return;
-        }
-
-        combo.KeyDown += SuppressHotkeyOnCombo;
-    }
-
-    private void SuppressHotkeyOnCombo(object? sender, KeyEventArgs e)
-    {
-        if (e.KeyCode is Keys.D1 or Keys.NumPad1 or Keys.D2 or Keys.NumPad2 or Keys.D3 or Keys.NumPad3)
-        {
-            e.Handled = true;
-            e.SuppressKeyPress = true;
-        }
+            AutoSize = true,
+            Tag = groupIndex,
+            Margin = new Padding(0, 0, 0, 0),
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false
+        };
+        return panel;
     }
 
     private void SetActiveComboGroup(int groupIndex)
@@ -212,73 +186,159 @@ public partial class Main
             }
         }
     }
-
-    private void UpdateSecondaryOptions(ComboBox? primaryCombo, ComboBox? secondaryCombo)
+    private void PopulateOptionGroup(FlowLayoutPanel? groupPanel, int groupIndex, string? preferredKey)
     {
-        UpdateSecondaryOptions(primaryCombo, secondaryCombo, null);
-    }
-
-    private void UpdateSecondaryOptions(ComboBox? primaryCombo, ComboBox? secondaryCombo, string? preferredSecondary)
-    {
-        if (primaryCombo?.SelectedItem is not string primaryKey || secondaryCombo == null)
+        if (groupPanel == null)
         {
             return;
         }
 
-        secondaryCombo.BeginUpdate();
-        secondaryCombo.Items.Clear();
-
-        if (_configOptions.TryGetValue(primaryKey, out var secondaryOptions))
+        groupPanel.SuspendLayout();
+        groupPanel.Controls.Clear();
+        foreach (var option in _configOptions)
         {
-            foreach (var key in secondaryOptions.Keys.OrderBy(k => k))
+            var radio = new RadioButton
             {
-                secondaryCombo.Items.Add(key);
+                AutoSize = true,
+                Text = string.Empty,
+                Tag = option,
+                Margin = new Padding(0, 2, 4, 2)
+            };
+            radio.CheckedChanged += OptionRadio_CheckedChanged;
+
+            var label = new Label
+            {
+                AutoSize = true,
+                Text = option.Key,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(0, 4, 8, 2)
+            };
+
+            var rowPanel = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0, 0, 0, 0)
+            };
+            rowPanel.Controls.Add(radio);
+            rowPanel.Controls.Add(label);
+
+            if (preferredKey != null && string.Equals(preferredKey, option.Key, StringComparison.OrdinalIgnoreCase))
+            {
+                radio.Checked = true;
             }
 
-            if (secondaryCombo.Items.Count > 0)
-            {
-                if (preferredSecondary != null && secondaryCombo.Items.Contains(preferredSecondary))
-                {
-                    secondaryCombo.SelectedItem = preferredSecondary;
-                }
-                else
-                {
-                    secondaryCombo.SelectedIndex = 0;
-                }
-            }
+            groupPanel.Controls.Add(rowPanel);
         }
 
-        secondaryCombo.EndUpdate();
+        if (groupPanel.Controls.Count > 0 && !GetGroupRadios(groupPanel).Any(r => r.Checked))
+        {
+            GetGroupRadios(groupPanel).First().Checked = true;
+        }
+
+        groupPanel.ResumeLayout();
     }
 
-    private void RefreshComboSelections()
+    private void OptionRadio_CheckedChanged(object? sender, EventArgs e)
     {
-        RefreshComboPair(_firstPrimaryCombo, _firstSecondaryCombo);
-        RefreshComboPair(_secondPrimaryCombo, _secondSecondaryCombo);
-    }
-
-    private void RefreshComboPair(ComboBox? primaryCombo, ComboBox? secondaryCombo)
-    {
-        if (primaryCombo == null || secondaryCombo == null)
+        if (sender is not RadioButton radio || !radio.Checked)
         {
             return;
         }
 
-        var previousPrimary = primaryCombo.SelectedItem as string;
-        var previousSecondary = secondaryCombo.SelectedItem as string;
-
-        PopulatePrimaryOptions(primaryCombo);
-
-        if (previousPrimary != null && primaryCombo.Items.Contains(previousPrimary))
+        if (radio.Tag is not ConfigOption option)
         {
-            primaryCombo.SelectedItem = previousPrimary;
-        }
-        else if (primaryCombo.Items.Count > 0)
-        {
-            primaryCombo.SelectedIndex = 0;
+            return;
         }
 
-        UpdateSecondaryOptions(primaryCombo, secondaryCombo, previousSecondary);
+        var groupPanel = radio.Parent?.Parent as FlowLayoutPanel;
+        if (groupPanel != null)
+        {
+            foreach (var other in GetGroupRadios(groupPanel))
+            {
+                if (!ReferenceEquals(other, radio) && other.Checked)
+                {
+                    other.Checked = false;
+                }
+            }
+        }
+
+        var groupIndex = groupPanel?.Tag as int? ?? 0;
+        if (groupIndex == _activeComboGroup)
+        {
+            SetDownMovePixels(option.Value);
+        }
+    }
+
+    private void RefreshOptionSelections()
+    {
+        var firstSelected = GetSelectedOptionKey(_firstOptionGroupPanel);
+        var secondSelected = GetSelectedOptionKey(_secondOptionGroupPanel);
+
+        PopulateOptionGroup(_firstOptionGroupPanel, 1, firstSelected);
+        PopulateOptionGroup(_secondOptionGroupPanel, 2, secondSelected);
+    }
+
+    private string? GetSelectedOptionKey(FlowLayoutPanel? groupPanel)
+    {
+        var radio = GetGroupRadios(groupPanel).FirstOrDefault(r => r.Checked);
+        return radio?.Tag is ConfigOption option ? option.Key : null;
+    }
+
+    private double? GetSelectedOptionValue(int groupIndex)
+    {
+        var panel = groupIndex switch
+        {
+            1 => _firstOptionGroupPanel,
+            2 => _secondOptionGroupPanel,
+            _ => null
+        };
+
+        var radio = GetGroupRadios(panel).FirstOrDefault(r => r.Checked);
+        if (radio?.Tag is ConfigOption option)
+        {
+            return option.Value;
+        }
+
+        return null;
+    }
+
+    private void MoveSelectionInGroup(int groupIndex, int delta)
+    {
+        var panel = groupIndex switch
+        {
+            1 => _firstOptionGroupPanel,
+            2 => _secondOptionGroupPanel,
+            _ => null
+        };
+
+        if (panel == null)
+        {
+            return;
+        }
+
+        var radios = GetGroupRadios(panel).ToList();
+        if (radios.Count == 0)
+        {
+            return;
+        }
+
+        var currentIndex = radios.FindIndex(r => r.Checked);
+        if (currentIndex < 0)
+        {
+            currentIndex = 0;
+        }
+
+        var nextIndex = (currentIndex + delta) % radios.Count;
+        if (nextIndex < 0)
+        {
+            nextIndex += radios.Count;
+        }
+        if (nextIndex != currentIndex)
+        {
+            radios[nextIndex].Checked = true;
+        }
     }
 
     private void LoadSelectionState()
@@ -297,9 +357,10 @@ public partial class Main
                 return;
             }
 
-            ApplySelection(_firstPrimaryCombo, _firstSecondaryCombo, state.FirstPrimary, state.FirstSecondary);
-            ApplySelection(_secondPrimaryCombo, _secondSecondaryCombo, state.SecondPrimary, state.SecondSecondary);
-            Logger.Info("已恢复上次的下拉选项");
+            ApplyOptionSelection(_firstOptionGroupPanel, state.FirstOption);
+            ApplyOptionSelection(_secondOptionGroupPanel, state.SecondOption);
+            SetActiveComboGroup(state.ActiveGroup);
+            Logger.Info("已恢复上次的选项");
         }
         catch (Exception ex)
         {
@@ -307,19 +368,33 @@ public partial class Main
         }
     }
 
-    private void ApplySelection(ComboBox? primaryCombo, ComboBox? secondaryCombo, string? primaryValue, string? secondaryValue)
+    private void ApplyOptionSelection(FlowLayoutPanel? groupPanel, string? optionKey)
     {
-        if (primaryCombo == null || secondaryCombo == null)
+        if (groupPanel == null || string.IsNullOrWhiteSpace(optionKey))
         {
             return;
         }
 
-        if (primaryValue != null && primaryCombo.Items.Contains(primaryValue))
+        foreach (var radio in GetGroupRadios(groupPanel))
         {
-            primaryCombo.SelectedItem = primaryValue;
+            if (radio.Tag is ConfigOption option && string.Equals(option.Key, optionKey, StringComparison.OrdinalIgnoreCase))
+            {
+                radio.Checked = true;
+                return;
+            }
+        }
+    }
+
+    private IEnumerable<RadioButton> GetGroupRadios(FlowLayoutPanel? groupPanel)
+    {
+        if (groupPanel == null)
+        {
+            return Enumerable.Empty<RadioButton>();
         }
 
-        UpdateSecondaryOptions(primaryCombo, secondaryCombo, secondaryValue);
+        return groupPanel.Controls
+            .OfType<FlowLayoutPanel>()
+            .SelectMany(p => p.Controls.OfType<RadioButton>());
     }
 
     private void SaveSelectionState()
@@ -328,10 +403,9 @@ public partial class Main
         {
             var state = new SelectionState
             {
-                FirstPrimary = _firstPrimaryCombo?.SelectedItem as string,
-                FirstSecondary = _firstSecondaryCombo?.SelectedItem as string,
-                SecondPrimary = _secondPrimaryCombo?.SelectedItem as string,
-                SecondSecondary = _secondSecondaryCombo?.SelectedItem as string
+                FirstOption = GetSelectedOptionKey(_firstOptionGroupPanel),
+                SecondOption = GetSelectedOptionKey(_secondOptionGroupPanel),
+                ActiveGroup = _activeComboGroup
             };
 
             var dir = Path.GetDirectoryName(_selectionStatePath);
@@ -342,7 +416,7 @@ public partial class Main
 
             var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_selectionStatePath, json);
-            Logger.Info("已保存当前下拉选项");
+            Logger.Info("已保存当前选项");
         }
         catch (Exception ex)
         {
@@ -352,9 +426,8 @@ public partial class Main
 
     private class SelectionState
     {
-        public string? FirstPrimary { get; set; }
-        public string? FirstSecondary { get; set; }
-        public string? SecondPrimary { get; set; }
-        public string? SecondSecondary { get; set; }
+        public string? FirstOption { get; set; }
+        public string? SecondOption { get; set; }
+        public int ActiveGroup { get; set; } = 1;
     }
 }

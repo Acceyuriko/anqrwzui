@@ -85,26 +85,26 @@ public partial class Main
     EvaluateMouseMoveState();
   }
 
-  private void QueueSetStepFromCombo(ComboBox? primaryCombo, ComboBox? secondaryCombo)
+  private void QueueSetStepFromActiveGroup()
   {
-    if (primaryCombo == null || secondaryCombo == null)
+    if (InvokeRequired)
+    {
+      BeginInvoke(new Action(SetStepFromActiveGroup));
+    }
+    else
+    {
+      SetStepFromActiveGroup();
+    }
+  }
+
+  private void SetStepFromActiveGroup()
+  {
+    if (_activeComboGroup == 0)
     {
       return;
     }
 
-    if (InvokeRequired)
-    {
-      BeginInvoke(new Action(() => SetStepFromCombo(primaryCombo, secondaryCombo)));
-    }
-    else
-    {
-      SetStepFromCombo(primaryCombo, secondaryCombo);
-    }
-  }
-
-  private void SetStepFromCombo(ComboBox primaryCombo, ComboBox secondaryCombo)
-  {
-    var value = GetConfigValueFromSelection(primaryCombo, secondaryCombo);
+    var value = GetSelectedOptionValue(_activeComboGroup);
     if (value.HasValue)
     {
       SetDownMovePixels(value.Value);
@@ -115,27 +115,14 @@ public partial class Main
     }
   }
 
-  private double? GetConfigValueFromSelection(ComboBox primaryCombo, ComboBox secondaryCombo)
-  {
-    if (primaryCombo.SelectedItem is not string primaryKey || secondaryCombo.SelectedItem is not string secondaryKey)
-    {
-      return null;
-    }
-
-    if (_configOptions.TryGetValue(primaryKey, out var secondaryDict) && secondaryDict.TryGetValue(secondaryKey, out var value))
-    {
-      return value;
-    }
-
-    return null;
-  }
-
   private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
   {
     const int WM_LBUTTONDOWN = 0x0201;
     const int WM_LBUTTONUP = 0x0202;
     const int WM_RBUTTONDOWN = 0x0204;
     const int WM_RBUTTONUP = 0x0205;
+    const int WM_MOUSEWHEEL = 0x020A;
+    const int VK_CONTROL = 0x11;
 
     if (nCode >= 0)
     {
@@ -155,6 +142,23 @@ public partial class Main
       {
         _isRightButtonDown = false;
       }
+      else if (wParam == (IntPtr)WM_MOUSEWHEEL)
+      {
+        var ctrlDown = (NativeMethods.GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        if (ctrlDown)
+        {
+          var hookStruct = Marshal.PtrToStructure<NativeMethods.MSLLHOOKSTRUCT>(lParam);
+          var delta = (short)((hookStruct.mouseData >> 16) & 0xffff);
+          if (delta > 0)
+          {
+            QueueMoveActiveSelection(-1);
+          }
+          else if (delta < 0)
+          {
+            QueueMoveActiveSelection(1);
+          }
+        }
+      }
 
       EvaluateMouseMoveState();
     }
@@ -166,7 +170,6 @@ public partial class Main
   {
     const int WM_KEYDOWN = 0x0100;
     const int WM_KEYUP = 0x0101;
-    const int VK_CONTROL = 0x11;
 
     if (nCode >= 0)
     {
@@ -175,35 +178,17 @@ public partial class Main
 
       if (wParam == (IntPtr)WM_KEYDOWN)
       {
-        var ctrlDown = (NativeMethods.GetKeyState(VK_CONTROL) & 0x8000) != 0;
-        if (ctrlDown)
-        {
-          switch (key)
-          {
-            case Keys.D1:
-            case Keys.NumPad1:
-              QueueMoveActivePrimarySelectionNext();
-              break;
-            case Keys.D2:
-            case Keys.NumPad2:
-              QueueMoveActiveSecondarySelectionNext();
-              break;
-          }
-
-          return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
-        }
-
         switch (key)
         {
           case Keys.D1:
           case Keys.NumPad1:
-            QueueSetStepFromCombo(_firstPrimaryCombo, _firstSecondaryCombo);
             SetActiveComboGroup(1);
+            QueueSetStepFromActiveGroup();
             break;
           case Keys.D2:
           case Keys.NumPad2:
-            QueueSetStepFromCombo(_secondPrimaryCombo, _secondSecondaryCombo);
             SetActiveComboGroup(2);
+            QueueSetStepFromActiveGroup();
             break;
           case Keys.D3:
           case Keys.NumPad3:
@@ -220,67 +205,25 @@ public partial class Main
     return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
   }
 
-  private void QueueMoveActivePrimarySelectionNext()
+  private void QueueMoveActiveSelection(int delta)
   {
     if (InvokeRequired)
     {
-      BeginInvoke(new Action(MoveActivePrimarySelectionNext));
+      BeginInvoke(new Action(() => MoveActiveSelection(delta)));
     }
     else
     {
-      MoveActivePrimarySelectionNext();
+      MoveActiveSelection(delta);
     }
   }
 
-  private void QueueMoveActiveSecondarySelectionNext()
+  private void MoveActiveSelection(int delta)
   {
-    if (InvokeRequired)
-    {
-      BeginInvoke(new Action(MoveActiveSecondarySelectionNext));
-    }
-    else
-    {
-      MoveActiveSecondarySelectionNext();
-    }
-  }
-
-  private void MoveActivePrimarySelectionNext()
-  {
-    var combo = _activeComboGroup switch
-    {
-      1 => _firstPrimaryCombo,
-      2 => _secondPrimaryCombo,
-      _ => null
-    };
-
-    MoveComboSelectionNext(combo);
-  }
-
-  private void MoveActiveSecondarySelectionNext()
-  {
-    var combo = _activeComboGroup switch
-    {
-      1 => _firstSecondaryCombo,
-      2 => _secondSecondaryCombo,
-      _ => null
-    };
-
-    MoveComboSelectionNext(combo);
-  }
-
-  private void MoveComboSelectionNext(ComboBox? combo)
-  {
-    if (combo == null || combo.Items.Count == 0)
+    if (_activeComboGroup == 0)
     {
       return;
     }
 
-    if (combo.SelectedIndex < 0)
-    {
-      combo.SelectedIndex = 0;
-      return;
-    }
-
-    combo.SelectedIndex = (combo.SelectedIndex + 1) % combo.Items.Count;
+    MoveSelectionInGroup(_activeComboGroup, delta);
   }
 }

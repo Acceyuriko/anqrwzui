@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 
@@ -32,17 +33,23 @@ public partial class Main
                 return;
             }
 
-            var defaultConfig = new Dictionary<string, Dictionary<string, double>>
+            var defaultConfig = new List<object[]>
             {
-                ["default"] = new() { ["1"] = 0, ["2"] = 0, ["3"] = 0, ["4"] = 0 },
-                ["m416"] = new() { ["1"] = 1.0, ["2"] = 2.0, ["3"] = 3.0, ["4"] = 4.0 },
-                ["aks"] = new() { ["1"] = 2.0, ["2"] = 4.0, ["3"] = 6.0, ["4"] = 8.0 },
-                ["ump"] = new() { ["1"] = 0.5, ["2"] = 1.0, ["3"] = 1.5, ["4"] = 2.0 }
+                new object[] { "default", 0.0 },
+                new object[] { "m416-1", 0.6 },
+                new object[] { "vss", 0.7 },
+                new object[] { "m416-2", 1.0 },
+                new object[] { "aks-1", 1.1 },
+                new object[] { "m416-3", 1.6 },
+                new object[] { "m416-4", 2.2 },
             };
 
             var json = JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_configPath, json);
-            _configOptions = defaultConfig;
+            if (TryParseConfigOptions(json, out var parsedOptions))
+            {
+                _configOptions = parsedOptions;
+            }
             Logger.Info($"未找到配置文件，已创建默认配置: {_configPath}");
         }
         catch (Exception ex)
@@ -62,16 +69,15 @@ public partial class Main
             }
 
             var json = File.ReadAllText(_configPath);
-            var options = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, double>>>(json);
-            if (options != null)
+            if (TryParseConfigOptions(json, out var options))
             {
                 _configOptions = options;
-                Logger.Info($"配置文件加载成功, 共有 {_configOptions.Count} 个一级选项");
-                RefreshComboSelections();
+                Logger.Info($"配置文件加载成功, 共有 {_configOptions.Count} 个选项");
+                RefreshOptionSelections();
                 return true;
             }
 
-            Logger.Warning("配置文件解析结果为空");
+            Logger.Warning("配置文件解析结果为空或格式不正确");
             return false;
         }
         catch (Exception ex)
@@ -131,11 +137,11 @@ public partial class Main
             {
                 if (InvokeRequired)
                 {
-                    BeginInvoke(new Action(RefreshComboSelections));
+                    BeginInvoke(new Action(RefreshOptionSelections));
                 }
                 else
                 {
-                    RefreshComboSelections();
+                    RefreshOptionSelections();
                 }
             }
         }
@@ -165,6 +171,63 @@ public partial class Main
         catch (Exception ex)
         {
             Logger.Error("释放配置文件监控资源失败", ex);
+        }
+    }
+
+    private bool TryParseConfigOptions(string json, out List<ConfigOption> options)
+    {
+        options = new List<ConfigOption>();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                var arr = item.EnumerateArray().ToArray();
+                if (arr.Length < 2)
+                {
+                    continue;
+                }
+
+                var key = arr[0].GetString();
+                if (string.IsNullOrWhiteSpace(key))
+                {
+                    continue;
+                }
+
+                double value;
+                if (arr[1].ValueKind == JsonValueKind.Number)
+                {
+                    value = arr[1].GetDouble();
+                }
+                else if (arr[1].ValueKind == JsonValueKind.String && double.TryParse(arr[1].GetString(), out var parsed))
+                {
+                    value = parsed;
+                }
+                else
+                {
+                    continue;
+                }
+
+                options.Add(new ConfigOption(key, value));
+            }
+
+            options = options.OrderBy(o => o.Value).ThenBy(o => o.Key).ToList();
+            return options.Count > 0;
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("解析配置文件失败", ex);
+            return false;
         }
     }
 }
