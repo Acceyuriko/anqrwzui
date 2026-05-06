@@ -37,9 +37,7 @@ public partial class Main
             {
                 new object[] { "default", 0.0 },
                 new object[] { "m416-1", 0.6 },
-                new object[] { "vss", 0.7 },
                 new object[] { "m416-2", 1.0 },
-                new object[] { "aks-1", 1.1 },
                 new object[] { "m416-3", 1.6 },
                 new object[] { "m416-4", 2.2 },
             };
