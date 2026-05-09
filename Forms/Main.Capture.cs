@@ -12,6 +12,7 @@ public partial class Main
         {
             var modelPath = @"Model\best.onnx";
             _yoloDetector = new YoloV8Detector(modelPath, UpdateDeviceLabel);
+            _yoloDetector.SetSelfFilterAreaRatioThreshold(_selfFilterAreaRatio);
             Logger.Info("目标检测初始化成功");
         }
         catch (Exception ex)

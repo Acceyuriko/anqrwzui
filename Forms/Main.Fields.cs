@@ -40,6 +40,14 @@ public partial class Main
     private string _selectionStatePath = string.Empty;
     private FileSystemWatcher? _configWatcher;
     private System.Threading.Timer? _configReloadTimer;
+    private System.Threading.Timer? _configSaveDebounceTimer;
+    private TrackBar? _selfFilterSlider;
+    private Label? _selfFilterSliderValueLabel;
+    private volatile bool _suppressSliderEvent;
+    private float _selfFilterAreaRatio = 0.018f;
+    private const int SelfFilterSliderMin = 5;
+    private const int SelfFilterSliderMax = 80;
+    private const int SelfFilterSliderScale = 1000;
     private volatile bool _isLeftButtonDown;
     private volatile bool _isRightButtonDown;
     private double _downMovePixels = 0;

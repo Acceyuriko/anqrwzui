@@ -13,10 +13,14 @@ namespace anqrwzui
   {
     private InferenceSession? _session;
     private bool _isDisposed = false;
-    private readonly string[] _classNames = { "head" };
+    private readonly string[] _classNames = { "head", "self_head", "team_head" };
+    private const int _targetClassId = 0;
     private readonly float _confidenceThreshold = 0.45f;
     private readonly float _iouThreshold = 0.45f;
     private readonly int _inputSize = 640;
+    // 自身头部通常在画面下方且框更大，优先过滤这类框
+    private volatile float _selfFilterMinAreaRatio = 0.018f;
+    private readonly float _selfFilterMinHeightRatio = 0.12f;
     private readonly string _inputName;
     private readonly Action<string>? _deviceCallback;
     private readonly float[] _tensorBuffer;
@@ -84,6 +88,16 @@ namespace anqrwzui
         _deviceCallback?.Invoke("初始化失败");
         throw;
       }
+    }
+
+    public void SetSelfFilterAreaRatioThreshold(float areaRatio)
+    {
+      if (float.IsNaN(areaRatio) || float.IsInfinity(areaRatio))
+      {
+        return;
+      }
+
+      _selfFilterMinAreaRatio = Math.Clamp(areaRatio, 0.005f, 0.08f);
     }
 
     public List<DetectionResult> Detect(Bitmap image)
@@ -266,6 +280,10 @@ namespace anqrwzui
           // 计算最终置信度（若无 objectness 则直接使用类别分数）
           float confidence = hasObjectness ? objectness * maxScore : maxScore;
 
+          // 仅保留目标类别 head（class 0）
+          if (classId != _targetClassId)
+            continue;
+
           // 早筛低置信度，减少后续计算
           if (confidence < _confidenceThreshold)
             continue;
@@ -281,6 +299,10 @@ namespace anqrwzui
               y1 * scaleY,
               (x2 - x1) * scaleX,
               (y2 - y1) * scaleY);
+
+          // 优先过滤屏幕底部大框（常见于自身头部，位置常在准星左下）
+          if (IsLikelySelfHeadByScreenHeuristic(rect, originalWidth, originalHeight))
+            continue;
 
           if (classId >= _classNames.Length)
             continue; // 跳过未定义类别
@@ -303,6 +325,29 @@ namespace anqrwzui
 
       // 应用NMS
       return ApplyNMS(results);
+    }
+
+    private bool IsLikelySelfHeadByScreenHeuristic(RectangleF box, int screenWidth, int screenHeight)
+    {
+      if (screenWidth <= 0 || screenHeight <= 0)
+        return false;
+
+      float areaRatio = (box.Width * box.Height) / (screenWidth * screenHeight);
+      float heightRatio = box.Height / screenHeight;
+      float centerX = box.Left + box.Width * 0.5f;
+      float centerY = box.Top + box.Height * 0.5f;
+
+      // 准星中心默认在屏幕中心；自身头部常出现在其左下区域
+      bool inCrosshairLowerLeftRegion =
+          centerX >= screenWidth * 0.22f &&
+          centerX <= screenWidth * 0.58f &&
+          centerY >= screenHeight * 0.52f &&
+          centerY <= screenHeight * 0.98f;
+
+      bool nearBottom = centerY >= screenHeight * 0.68f;
+      bool isLargeBox = areaRatio >= _selfFilterMinAreaRatio || heightRatio >= _selfFilterMinHeightRatio;
+
+      return isLargeBox && nearBottom && inCrosshairLowerLeftRegion;
     }
 
     private List<DetectionResult> ApplyNMS(List<DetectionResult> detections)

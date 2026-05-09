@@ -3,6 +3,6 @@
 /bin
 /Logs
 /YoloTrain/datasets
-/YoloTrain/exp
+/YoloTrain/exp*
 /Model
 

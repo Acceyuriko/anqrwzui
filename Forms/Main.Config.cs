@@ -7,6 +7,17 @@ namespace anqrwzui;
 
 public partial class Main
 {
+    private sealed class AppConfigDocument
+    {
+        public List<object[]>? Options { get; set; }
+        public DetectorConfig? Detector { get; set; }
+    }
+
+    private sealed class DetectorConfig
+    {
+        public float SelfFilterAreaRatio { get; set; } = 0.018f;
+    }
+
     private void InitializeConfigPath()
     {
         _configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config", "config.json");
@@ -33,7 +44,7 @@ public partial class Main
                 return;
             }
 
-            var defaultConfig = new List<object[]>
+            var defaultOptions = new List<object[]>
             {
                 new object[] { "default", 0.0 },
                 new object[] { "m416-1", 0.6 },
@@ -42,11 +53,21 @@ public partial class Main
                 new object[] { "m416-4", 2.2 },
             };
 
+            var defaultConfig = new AppConfigDocument
+            {
+                Options = defaultOptions,
+                Detector = new DetectorConfig
+                {
+                    SelfFilterAreaRatio = _selfFilterAreaRatio
+                }
+            };
+
             var json = JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_configPath, json);
-            if (TryParseConfigOptions(json, out var parsedOptions))
+            if (TryParseConfig(json, out var parsedOptions, out var areaRatio))
             {
                 _configOptions = parsedOptions;
+                _selfFilterAreaRatio = areaRatio;
             }
             Logger.Info($"未找到配置文件，已创建默认配置: {_configPath}");
         }
@@ -67,11 +88,11 @@ public partial class Main
             }
 
             var json = File.ReadAllText(_configPath);
-            if (TryParseConfigOptions(json, out var options))
+            if (TryParseConfig(json, out var options, out var areaRatio))
             {
                 _configOptions = options;
+                _selfFilterAreaRatio = areaRatio;
                 Logger.Info($"配置文件加载成功, 共有 {_configOptions.Count} 个选项");
-                RefreshOptionSelections();
                 return true;
             }
 
@@ -135,11 +156,16 @@ public partial class Main
             {
                 if (InvokeRequired)
                 {
-                    BeginInvoke(new Action(RefreshOptionSelections));
+                    BeginInvoke(new Action(() =>
+                    {
+                        RefreshOptionSelections();
+                        ApplySelfFilterAreaRatioToUiAndDetector();
+                    }));
                 }
                 else
                 {
                     RefreshOptionSelections();
+                    ApplySelfFilterAreaRatioToUiAndDetector();
                 }
             }
         }
@@ -165,6 +191,9 @@ public partial class Main
 
             _configReloadTimer?.Dispose();
             _configReloadTimer = null;
+
+            _configSaveDebounceTimer?.Dispose();
+            _configSaveDebounceTimer = null;
         }
         catch (Exception ex)
         {
@@ -172,18 +201,51 @@ public partial class Main
         }
     }
 
-    private bool TryParseConfigOptions(string json, out List<ConfigOption> options)
+    private bool TryParseConfig(string json, out List<ConfigOption> options, out float selfFilterAreaRatio)
     {
         options = new List<ConfigOption>();
+        selfFilterAreaRatio = _selfFilterAreaRatio;
         try
         {
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+
+            JsonElement optionsElement;
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+            {
+                // 兼容旧格式：根节点就是选项数组
+                optionsElement = doc.RootElement;
+            }
+            else if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                if (!doc.RootElement.TryGetProperty("options", out optionsElement) || optionsElement.ValueKind != JsonValueKind.Array)
+                {
+                    return false;
+                }
+
+                if (doc.RootElement.TryGetProperty("detector", out var detectorElement) && detectorElement.ValueKind == JsonValueKind.Object)
+                {
+                    if (detectorElement.TryGetProperty("selfFilterAreaRatio", out var ratioElement))
+                    {
+                        float ratio = selfFilterAreaRatio;
+                        if (ratioElement.ValueKind == JsonValueKind.Number)
+                        {
+                            ratio = (float)ratioElement.GetDouble();
+                        }
+                        else if (ratioElement.ValueKind == JsonValueKind.String && float.TryParse(ratioElement.GetString(), out var parsedRatio))
+                        {
+                            ratio = parsedRatio;
+                        }
+
+                        selfFilterAreaRatio = ClampSelfFilterAreaRatio(ratio);
+                    }
+                }
+            }
+            else
             {
                 return false;
             }
 
-            foreach (var item in doc.RootElement.EnumerateArray())
+            foreach (var item in optionsElement.EnumerateArray())
             {
                 if (item.ValueKind != JsonValueKind.Array)
                 {
@@ -227,5 +289,49 @@ public partial class Main
             Logger.Error("解析配置文件失败", ex);
             return false;
         }
+    }
+
+    private void QueueSaveConfigDebounced(int dueTimeMs = 350)
+    {
+        _configSaveDebounceTimer ??= new System.Threading.Timer(_ => SaveConfigDocument(), null, Timeout.Infinite, Timeout.Infinite);
+        _configSaveDebounceTimer.Change(dueTimeMs, Timeout.Infinite);
+    }
+
+    private void SaveConfigDocument()
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(_configPath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var config = new AppConfigDocument
+            {
+                Options = _configOptions.Select(o => new object[] { o.Key, o.Value }).ToList(),
+                Detector = new DetectorConfig
+                {
+                    SelfFilterAreaRatio = ClampSelfFilterAreaRatio(_selfFilterAreaRatio)
+                }
+            };
+
+            var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(_configPath, json);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("保存配置文件失败", ex);
+        }
+    }
+
+    private static float ClampSelfFilterAreaRatio(float value)
+    {
+        if (float.IsNaN(value) || float.IsInfinity(value))
+        {
+            return 0.018f;
+        }
+
+        return Math.Clamp(value, SelfFilterSliderMin / (float)SelfFilterSliderScale, SelfFilterSliderMax / (float)SelfFilterSliderScale);
     }
 }
