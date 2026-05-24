@@ -13,8 +13,7 @@ namespace anqrwzui
   {
     private InferenceSession? _session;
     private bool _isDisposed = false;
-    private readonly string[] _classNames = { "head", "self_head", "team_head" };
-    private const int _targetClassId = 0;
+    private readonly string[] _classNames = { "head" };
     private readonly float _confidenceThreshold = 0.45f;
     private readonly float _iouThreshold = 0.45f;
     private readonly int _inputSize = 640;
@@ -177,43 +176,36 @@ namespace anqrwzui
 
       try
       {
-        // YOLOv8输出格式: [1, C, N] 或 [1, N, C]
+        // 支持单类别 YOLOv8 导出格式: [1, N, 5] 或 [1, N, 6]，以及 [1, 5, N] / [1, 6, N]
         var dims = output.Dimensions;
-        int dim1 = dims[1];
-        int dim2 = dims.Length > 2 ? dims[2] : 0;
-
-        // 处理不同的输出格式
-        int numDetections;
-        int featuresPerDetection;
-        bool channelsFirst;
-
-        if (dims.Length == 3)
-        {
-          if (dim1 == dim2)
-          {
-            channelsFirst = true;
-          }
-          else
-          {
-            channelsFirst = dim1 < dim2; // 通常 C << N
-          }
-
-          featuresPerDetection = channelsFirst ? dim1 : dim2;
-          numDetections = channelsFirst ? dim2 : dim1;
-
-          if (featuresPerDetection < 5)
-          {
-            Logger.Error($"不支持的输出格式: [1, {dim1}, {dim2}]");
-            return results;
-          }
-        }
-        else
+        if (dims.Length != 3)
         {
           Logger.Error($"不支持的输出维度: {dims.Length}");
           return results;
         }
 
-        // 解析检测结果
+        bool channelsFirst;
+        int numDetections;
+        int featuresPerDetection;
+
+        if (dims[1] == dims[2])
+        {
+          channelsFirst = true;
+        }
+        else
+        {
+          channelsFirst = dims[1] < dims[2];
+        }
+
+        featuresPerDetection = channelsFirst ? dims[1] : dims[2];
+        numDetections = channelsFirst ? dims[2] : dims[1];
+
+        if (featuresPerDetection != 5 && featuresPerDetection != 6)
+        {
+          Logger.Error($"不支持的单类别输出格式: [1, {dims[1]}, {dims[2]}]");
+          return results;
+        }
+
         var scaleX = (float)originalWidth / _inputSize;
         var scaleY = (float)originalHeight / _inputSize;
 
@@ -224,71 +216,45 @@ namespace anqrwzui
 
         for (int i = 0; i < numDetections; i++)
         {
-          // YOLOv8 默认输出: 前4个是 bbox，后面是每类置信度；有些导出会在第5位带 objectness。
-          // 自适应判断是否包含 objectness。
-          int classCountNoObj = featuresPerDetection - 4;
-          int classCountWithObj = featuresPerDetection - 5;
-          bool hasObjectness = classCountWithObj > 0 &&
-                               (featuresPerDetection == 85 || featuresPerDetection == 7 || classCountWithObj == _classNames.Length);
-          int classStart = hasObjectness ? 5 : 4;
-          int classCount = hasObjectness ? classCountWithObj : classCountNoObj;
-          classCount = Math.Min(classCount, _classNames.Length);
-          if (classCount <= 0)
-          {
-            continue;
-          }
+          float x_center, y_center, width, height, score, objectness = 1.0f;
 
-          float x_center, y_center, width, height, objectness;
-
-          if (channelsFirst) // [1, C, n]
+          if (channelsFirst) // [1, C, N]
           {
             x_center = output[0, 0, i];
             y_center = output[0, 1, i];
             width = output[0, 2, i];
             height = output[0, 3, i];
-            objectness = hasObjectness ? output[0, 4, i] : 1.0f;
+            if (featuresPerDetection == 6)
+            {
+              objectness = output[0, 4, i];
+              score = output[0, 5, i];
+            }
+            else
+            {
+              score = output[0, 4, i];
+            }
           }
-          else // [1, n, C]
+          else // [1, N, C]
           {
             x_center = output[0, i, 0];
             y_center = output[0, i, 1];
             width = output[0, i, 2];
             height = output[0, i, 3];
-            objectness = hasObjectness ? output[0, i, 4] : 1.0f;
-          }
-
-          // 找到最大类别分数
-          float maxScore = 0;
-          int classId = 0;
-
-          for (int j = 0; j < classCount; j++)
-          {
-            int idx = classStart + j;
-            float score;
-            if (channelsFirst)
-              score = output[0, idx, i];
-            else
-              score = output[0, i, idx];
-
-            if (score > maxScore)
+            if (featuresPerDetection == 6)
             {
-              maxScore = score;
-              classId = j;
+              objectness = output[0, i, 4];
+              score = output[0, i, 5];
+            }
+            else
+            {
+              score = output[0, i, 4];
             }
           }
 
-          // 计算最终置信度（若无 objectness 则直接使用类别分数）
-          float confidence = hasObjectness ? objectness * maxScore : maxScore;
-
-          // 仅保留目标类别 head（class 0）
-          if (classId != _targetClassId)
-            continue;
-
-          // 早筛低置信度，减少后续计算
+          var confidence = featuresPerDetection == 6 ? objectness * score : score;
           if (confidence < _confidenceThreshold)
             continue;
 
-          // 转换为边界框坐标
           var x1 = x_center - width / 2;
           var y1 = y_center - height / 2;
           var x2 = x_center + width / 2;
@@ -300,21 +266,12 @@ namespace anqrwzui
               (x2 - x1) * scaleX,
               (y2 - y1) * scaleY);
 
-          // 优先过滤屏幕底部大框（常见于自身头部，位置常在准星左下）
-          if (IsLikelySelfHeadByScreenHeuristic(rect, originalWidth, originalHeight))
-            continue;
-
-          if (classId >= _classNames.Length)
-            continue; // 跳过未定义类别
-
-          var className = _classNames[classId];
-
           results.Add(new DetectionResult
           {
             BoundingBox = rect,
             Confidence = confidence,
-            ClassName = className,
-            ClassId = classId
+            ClassName = _classNames[0],
+            ClassId = 0
           });
         }
       }
@@ -323,31 +280,7 @@ namespace anqrwzui
         Logger.Error("后处理错误", ex);
       }
 
-      // 应用NMS
       return ApplyNMS(results);
-    }
-
-    private bool IsLikelySelfHeadByScreenHeuristic(RectangleF box, int screenWidth, int screenHeight)
-    {
-      if (screenWidth <= 0 || screenHeight <= 0)
-        return false;
-
-      float areaRatio = (box.Width * box.Height) / (screenWidth * screenHeight);
-      float heightRatio = box.Height / screenHeight;
-      float centerX = box.Left + box.Width * 0.5f;
-      float centerY = box.Top + box.Height * 0.5f;
-
-      // 准星中心默认在屏幕中心；自身头部常出现在其左下区域
-      bool inCrosshairLowerLeftRegion =
-          centerX >= screenWidth * 0.22f &&
-          centerX <= screenWidth * 0.58f &&
-          centerY >= screenHeight * 0.52f &&
-          centerY <= screenHeight * 0.98f;
-
-      bool nearBottom = centerY >= screenHeight * 0.68f;
-      bool isLargeBox = areaRatio >= _selfFilterMinAreaRatio || heightRatio >= _selfFilterMinHeightRatio;
-
-      return isLargeBox && nearBottom && inCrosshairLowerLeftRegion;
     }
 
     private List<DetectionResult> ApplyNMS(List<DetectionResult> detections)

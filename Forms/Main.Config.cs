@@ -217,14 +217,14 @@ public partial class Main
             }
             else if (doc.RootElement.ValueKind == JsonValueKind.Object)
             {
-                if (!doc.RootElement.TryGetProperty("options", out optionsElement) || optionsElement.ValueKind != JsonValueKind.Array)
+                if (!doc.RootElement.TryGetProperty("Options", out optionsElement) || optionsElement.ValueKind != JsonValueKind.Array)
                 {
                     return false;
                 }
 
-                if (doc.RootElement.TryGetProperty("detector", out var detectorElement) && detectorElement.ValueKind == JsonValueKind.Object)
+                if (doc.RootElement.TryGetProperty("Detector", out var detectorElement) && detectorElement.ValueKind == JsonValueKind.Object)
                 {
-                    if (detectorElement.TryGetProperty("selfFilterAreaRatio", out var ratioElement))
+                    if (detectorElement.TryGetProperty("SelfFilterAreaRatio", out var ratioElement))
                     {
                         float ratio = selfFilterAreaRatio;
                         if (ratioElement.ValueKind == JsonValueKind.Number)

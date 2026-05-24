@@ -1,4 +1,7 @@
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
+using System.Linq;
 
 namespace anqrwzui;
 
@@ -137,6 +140,7 @@ public partial class Main
                         try
                         {
                             var detections = _yoloDetector.Detect(bitmap);
+                            detections = FilterSelfHeadDetections(detections, bitmap.Width, bitmap.Height);
                             displayBitmap = DetectionRenderer.DrawDetections(bitmap, detections);
                         }
                         catch (Exception ex)
@@ -208,6 +212,35 @@ public partial class Main
         {
             _toggleCaptureButton.Text = text;
         }
+    }
+
+    private List<DetectionResult> FilterSelfHeadDetections(List<DetectionResult> detections, int screenWidth, int screenHeight)
+    {
+        return detections.Where(d => !IsLikelySelfHeadByScreenHeuristic(d.BoundingBox, screenWidth, screenHeight)).ToList();
+    }
+
+    private bool IsLikelySelfHeadByScreenHeuristic(RectangleF box, int screenWidth, int screenHeight)
+    {
+        if (screenWidth <= 0 || screenHeight <= 0)
+            return false;
+
+        float areaRatio = (box.Width * box.Height) / (screenWidth * screenHeight);
+        float heightRatio = box.Height / screenHeight;
+        float centerX = box.Left + box.Width * 0.5f;
+        float centerY = box.Top + box.Height * 0.5f;
+        const float selfFilterMinHeightRatio = 0.12f;
+
+        // 准星中心默认在屏幕中心；自身头部常出现在其左下区域
+        bool inCrosshairLowerLeftRegion =
+            centerX >= screenWidth * 0.22f &&
+            centerX <= screenWidth * 0.58f &&
+            centerY >= screenHeight * 0.52f &&
+            centerY <= screenHeight * 0.98f;
+
+        bool nearBottom = centerY >= screenHeight * 0.68f;
+        bool isLargeBox = areaRatio >= _selfFilterAreaRatio || heightRatio >= selfFilterMinHeightRatio;
+
+        return isLargeBox && nearBottom && inCrosshairLowerLeftRegion;
     }
 
     private void UpdatePictureBox(Bitmap bitmap)

@@ -268,6 +268,67 @@ def request_delete(client, path):
     raise RuntimeError(f'DELETE {path} failed: {response.status_code} {response.text[:300]}')
 
 
+def normalize_result_rectanglelabels(obj):
+    changed = False
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == 'rectanglelabels' and isinstance(value, list):
+                if value != ['head']:
+                    obj[key] = ['head']
+                    changed = True
+            elif normalize_result_rectanglelabels(value):
+                changed = True
+    elif isinstance(obj, list):
+        for item in obj:
+            if normalize_result_rectanglelabels(item):
+                changed = True
+    return changed
+
+
+def update_annotation_result_rectanglelabels(private_client, annotation):
+    annotation_id = annotation_field(annotation, 'id')
+    result = list(annotation_field(annotation, 'result', []) or [])
+    if not result:
+        return False
+
+    result_copy = copy.deepcopy(result)
+    if not normalize_result_rectanglelabels(result_copy):
+        return False
+
+    payload = {
+        'result': result_copy,
+    }
+    request_json(private_client, 'PATCH', f'/api/annotations/{annotation_id}/', json=payload)
+    return True
+
+
+def reset_task_annotations_classid(private_client, ls, task, verbose=False):
+    annotations = iter_task_annotations(ls, task)
+    task_summary = Counter()
+    task_summary['task_id'] = task.id
+    task_summary['annotations_total'] = len(annotations)
+    task_summary['annotations_modified'] = 0
+    task_summary['annotations_unchanged'] = 0
+    task_summary['annotations_failures'] = 0
+    task_summary['tasks_with_annotations'] = int(bool(annotations))
+    task_summary['tasks_without_annotations'] = int(not annotations)
+
+    for annotation in annotations:
+        try:
+            if update_annotation_result_rectanglelabels(private_client, annotation):
+                task_summary['annotations_modified'] += 1
+                if verbose:
+                    print(f"任务 {task.id} 标注 {annotation_field(annotation, 'id')} 已将 rectanglelabels 重置为 ['head']")
+            else:
+                task_summary['annotations_unchanged'] += 1
+        except Exception as exc:
+            task_summary['annotations_failures'] += 1
+            if verbose:
+                print(f"任务 {task.id} 标注 {annotation_field(annotation, 'id')} 更新失败: {exc}")
+
+    return task_summary
+
+
 def get_live_task_state(private_client, task_id):
     payload = request_json(private_client, 'GET', f'/api/tasks/{task_id}/')
     return {
@@ -424,9 +485,9 @@ def find_latest_backup_file():
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description='备份或恢复 Label Studio 任务。backup 会导出当前任务快照；restore 会从最新备份恢复指定任务。'
+        description='管理 Label Studio 任务。backup 导出当前任务快照；restore 从最新备份恢复；reset_classid 将所有标注结果的 rectanglelabels 重置为 head。'
     )
-    parser.add_argument('command', nargs='?', choices=['backup', 'restore'], default='backup')
+    parser.add_argument('command', nargs='?', choices=['backup', 'restore', 'reset_classid'], default='backup')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--task-ids', nargs='*', default=[], help='只处理指定任务，支持空格分隔或逗号分隔')
     group.add_argument('--all-task', action='store_true', help='显式确认要处理整个项目')
@@ -459,6 +520,22 @@ def main():
             print_summary('backup 摘要：', summary)
             return 0
 
+        if args.command == 'reset_classid':
+            summary = Counter()
+            for task in iter_selected_tasks(ls, args.project_id, args.task_ids, limit=None):
+                task_summary = reset_task_annotations_classid(private_client, ls, task, verbose=args.verbose)
+                summary['tasks_scanned'] += 1
+                summary['tasks_with_annotations'] += int(task_summary.get('tasks_with_annotations', 0))
+                summary['tasks_without_annotations'] += int(task_summary.get('tasks_without_annotations', 0))
+                summary['annotations_total'] += task_summary['annotations_total']
+                summary['annotations_modified'] += task_summary['annotations_modified']
+                summary['annotations_unchanged'] += task_summary['annotations_unchanged']
+                summary['annotations_failures'] += task_summary['annotations_failures']
+                summary['tasks_modified'] += int(task_summary['annotations_modified'] > 0)
+
+            print_summary('reset_classid 执行摘要：', summary)
+            return 0
+
         backup_path = find_latest_backup_file()
         backup_payload = read_json(backup_path)
         backup_tasks = list(iter_backup_tasks(backup_payload, args.task_ids))
@@ -470,3 +547,7 @@ def main():
     finally:
         private_client.close()
         httpx_client.close()
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
