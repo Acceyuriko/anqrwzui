@@ -85,6 +85,13 @@ public partial class Main
             Margin = new Padding(0, 6, 0, 0)
         };
 
+        _perspectiveModeLabel = new Label
+        {
+            AutoSize = true,
+            ForeColor = Color.DarkRed,
+            Margin = new Padding(10, 6, 12, 0)
+        };
+
         _activeComboLabel = new Label
         {
             Text = "当前: 1",
@@ -94,6 +101,7 @@ public partial class Main
         };
 
         rightTopRow.Controls.AddRange(new Control[] { _toggleCaptureButton, _deviceLabel, _fpsLabel });
+        leftLayout.Controls.Add(_perspectiveModeLabel);
         leftLayout.Controls.Add(_activeComboLabel);
 
         rightLayout.Controls.Add(rightTopRow, 0, 0);
@@ -108,8 +116,28 @@ public partial class Main
         this.Controls.SetChildIndex(mainLayout, 0);
 
         LoadSelectionState();
+        UpdatePerspectiveModeLabel();
 
         Logger.Debug("截取组件初始化完成");
+    }
+
+    private void UpdatePerspectiveModeLabel()
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(UpdatePerspectiveModeLabel));
+            return;
+        }
+
+        if (_perspectiveModeLabel != null)
+        {
+            _perspectiveModeLabel.Text = $"{GetPerspectiveModeText(GetEffectivePerspectiveMode())}";
+        }
     }
 
     private Control CreateSelfFilterSliderRow(TableLayoutPanel mainLayout)

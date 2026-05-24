@@ -7,6 +7,12 @@ namespace anqrwzui;
 
 public partial class Main
 {
+    private enum PerspectiveMode
+    {
+        FirstPerson,
+        ThirdPerson
+    }
+
     private DxgiScreenCapture? _screenCapture;
     private YoloV8Detector? _yoloDetector;
     private PictureBox? _pictureBox;
@@ -33,8 +39,10 @@ public partial class Main
     private FlowLayoutPanel? _secondOptionGroupPanel;
     private FlowLayoutPanel? _firstComboGroupPanel;
     private FlowLayoutPanel? _secondComboGroupPanel;
+    private Label? _perspectiveModeLabel;
     private Label? _activeComboLabel;
     private int _activeComboGroup = 1;
+    private int _basePerspectiveModeValue = (int)PerspectiveMode.ThirdPerson;
     private List<ConfigOption> _configOptions = new();
     private string _configPath = string.Empty;
     private string _selectionStatePath = string.Empty;
@@ -50,7 +58,9 @@ public partial class Main
     private const int SelfFilterSliderScale = 1000;
     private volatile bool _isLeftButtonDown;
     private volatile bool _isRightButtonDown;
+    private volatile bool _isVKeyDown;
     private double _downMovePixels = 0;
+    private const float LargestDetectionAreaSimilarityThreshold = 0.9f;
     private const int MouseMoveIntervalMs = 10;
     private double _moveAccumulator = 0;
     private double _noisePhase = 0;
@@ -61,6 +71,34 @@ public partial class Main
     private const double HorizontalNoiseAmplitudePixels = 0.1;
     private const double HorizontalNoiseFrequencyHz = 3;
     private readonly Random _rand = new();
+
+    private PerspectiveMode GetEffectivePerspectiveMode()
+    {
+        return _isRightButtonDown ? PerspectiveMode.FirstPerson : GetBasePerspectiveMode();
+    }
+
+    private PerspectiveMode GetBasePerspectiveMode()
+    {
+        return (PerspectiveMode)Volatile.Read(ref _basePerspectiveModeValue);
+    }
+
+    private bool IsFirstPersonModeActive()
+    {
+        return GetEffectivePerspectiveMode() == PerspectiveMode.FirstPerson;
+    }
+
+    private void ToggleBasePerspectiveModeState()
+    {
+        var nextMode = GetBasePerspectiveMode() == PerspectiveMode.FirstPerson
+            ? PerspectiveMode.ThirdPerson
+            : PerspectiveMode.FirstPerson;
+        Volatile.Write(ref _basePerspectiveModeValue, (int)nextMode);
+    }
+
+    private static string GetPerspectiveModeText(PerspectiveMode mode)
+    {
+        return mode == PerspectiveMode.FirstPerson ? "第一人称" : "第三人称";
+    }
 
     private sealed class ConfigOption
     {

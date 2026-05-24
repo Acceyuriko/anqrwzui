@@ -216,7 +216,43 @@ public partial class Main
 
     private List<DetectionResult> FilterSelfHeadDetections(List<DetectionResult> detections, int screenWidth, int screenHeight)
     {
+        if (detections.Count == 0 || IsFirstPersonModeActive())
+        {
+            return detections;
+        }
+
+        var uniqueLargestDetection = GetUniqueLargestDetection(detections);
+        if (uniqueLargestDetection != null)
+        {
+            return detections.Where(d => !ReferenceEquals(d, uniqueLargestDetection)).ToList();
+        }
+
         return detections.Where(d => !IsLikelySelfHeadByScreenHeuristic(d.BoundingBox, screenWidth, screenHeight)).ToList();
+    }
+
+    private DetectionResult? GetUniqueLargestDetection(IReadOnlyList<DetectionResult> detections)
+    {
+        if (detections.Count == 0)
+        {
+            return null;
+        }
+
+        var maxArea = detections.Max(d => GetDetectionArea(d.BoundingBox));
+        if (maxArea <= 0f)
+        {
+            return null;
+        }
+
+        var nearMaxDetections = detections
+            .Where(d => GetDetectionArea(d.BoundingBox) >= maxArea * LargestDetectionAreaSimilarityThreshold)
+            .ToList();
+
+        return nearMaxDetections.Count == 1 ? nearMaxDetections[0] : null;
+    }
+
+    private static float GetDetectionArea(RectangleF box)
+    {
+        return Math.Max(0f, box.Width) * Math.Max(0f, box.Height);
     }
 
     private bool IsLikelySelfHeadByScreenHeuristic(RectangleF box, int screenWidth, int screenHeight)

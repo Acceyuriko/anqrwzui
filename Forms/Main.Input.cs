@@ -126,6 +126,8 @@ public partial class Main
 
     if (nCode >= 0)
     {
+      var perspectiveModeChanged = false;
+
       if (wParam == (IntPtr)WM_LBUTTONDOWN)
       {
         _isLeftButtonDown = true;
@@ -137,10 +139,12 @@ public partial class Main
       else if (wParam == (IntPtr)WM_RBUTTONDOWN)
       {
         _isRightButtonDown = true;
+        perspectiveModeChanged = true;
       }
       else if (wParam == (IntPtr)WM_RBUTTONUP)
       {
         _isRightButtonDown = false;
+        perspectiveModeChanged = true;
       }
       else if (wParam == (IntPtr)WM_MOUSEWHEEL)
       {
@@ -158,6 +162,11 @@ public partial class Main
             QueueMoveActiveSelection(1);
           }
         }
+      }
+
+      if (perspectiveModeChanged)
+      {
+        UpdatePerspectiveModeLabel();
       }
 
       EvaluateMouseMoveState();
@@ -180,6 +189,14 @@ public partial class Main
       {
         switch (key)
         {
+          case Keys.V:
+            if (!_isVKeyDown)
+            {
+              _isVKeyDown = true;
+              ToggleBasePerspectiveModeState();
+              UpdatePerspectiveModeLabel();
+            }
+            break;
           case Keys.D1:
           case Keys.NumPad1:
             SetActiveComboGroup(1);
@@ -199,6 +216,10 @@ public partial class Main
       }
       else if (wParam == (IntPtr)WM_KEYUP)
       {
+        if (key == Keys.V)
+        {
+          _isVKeyDown = false;
+        }
       }
     }
 
