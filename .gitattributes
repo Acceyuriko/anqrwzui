@@ -1,0 +1,4 @@
+Assets/label-studio-data-exported-backup.zip filter=lfs diff=lfs merge=lfs -text
+Assets/best.onnx filter=lfs diff=lfs merge=lfs -text
+Assets/best.pt filter=lfs diff=lfs merge=lfs -text
+Assets/demo.mp4 filter=lfs diff=lfs merge=lfs -text
