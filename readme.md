@@ -8,9 +8,11 @@
 
 ![界面预览](Assets/screenshot.png)
 
-<video width="1080" controls>
-  <source src="Assets/demo.mp4" type="video/mp4">
-</video>
+
+
+https://github.com/user-attachments/assets/4b595373-8a1c-4f5e-849f-d0ce1a6c64ee
+
+
 
 ## 功能特性
 
