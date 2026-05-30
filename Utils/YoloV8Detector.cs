@@ -19,7 +19,6 @@ namespace anqrwzui
     private readonly int _inputSize = 640;
     // 自身头部通常在画面下方且框更大，优先过滤这类框
     private volatile float _selfFilterMinAreaRatio = 0.018f;
-    private readonly float _selfFilterMinHeightRatio = 0.12f;
     private readonly string _inputName;
     private readonly Action<string>? _deviceCallback;
     private readonly float[] _tensorBuffer;

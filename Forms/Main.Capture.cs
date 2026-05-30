@@ -65,6 +65,7 @@ public partial class Main
             _lastCaptureTicks = _stopwatch.ElapsedTicks;
             _captureCts = new CancellationTokenSource();
             _captureTask = Task.Run(() => CaptureLoopAsync(_captureCts.Token));
+            EvaluateMouseMoveState();
             UpdateToggleButtonText();
             Logger.Info("屏幕截取已启动");
         }
@@ -91,16 +92,13 @@ public partial class Main
         _screenCapture?.Dispose();
         _screenCapture = null;
         ResetFps();
-
-        lock (_frameLock)
-        {
-            _currentFrame?.Dispose();
-            _currentFrame = null;
-        }
+        StopMousePhysics(clearTargetSnapshot: true);
 
         if (_pictureBox != null)
         {
+            var oldImage = _pictureBox.Image;
             _pictureBox.Image = null;
+            oldImage?.Dispose();
         }
 
         UpdateToggleButtonText();
@@ -141,6 +139,7 @@ public partial class Main
                         {
                             var detections = _yoloDetector.Detect(bitmap);
                             detections = FilterSelfHeadDetections(detections, bitmap.Width, bitmap.Height);
+                            UpdateAimTargetSnapshot(detections, bitmap.Width, bitmap.Height);
                             displayBitmap = DetectionRenderer.DrawDetections(bitmap, detections);
                         }
                         catch (Exception ex)
@@ -148,12 +147,6 @@ public partial class Main
                             Logger.Error("目标检测过程中发生错误", ex);
                             displayBitmap = bitmap;
                         }
-                    }
-
-                    lock (_frameLock)
-                    {
-                        _currentFrame?.Dispose();
-                        _currentFrame = displayBitmap;
                     }
 
                     UpdatePictureBox(displayBitmap);
@@ -250,6 +243,270 @@ public partial class Main
         return nearMaxDetections.Count == 1 ? nearMaxDetections[0] : null;
     }
 
+    private void UpdateAimTargetSnapshot(IReadOnlyList<DetectionResult> detections, int imageWidth, int imageHeight)
+    {
+        if (imageWidth <= 0 || imageHeight <= 0)
+        {
+            lock (_aimTargetLock)
+            {
+                ClearAimTargetStateLocked(clearPublishedSnapshot: true);
+            }
+
+            return;
+        }
+
+        lock (_aimTargetLock)
+        {
+            if (TrySelectAimTargetLocked(detections, imageWidth, imageHeight, out _, out var offsetX, out var offsetY, out var staleFrames))
+            {
+                _latestAimTargetOffsetX = offsetX;
+                _latestAimTargetOffsetY = offsetY;
+                _latestAimTargetStaleFrames = staleFrames;
+                if (staleFrames == 0)
+                {
+                    _latestAimTargetVersion++;
+                }
+
+                return;
+            }
+
+            ClearAimTargetStateLocked(clearPublishedSnapshot: true);
+        }
+    }
+
+    private bool TrySelectAimTargetLocked(IReadOnlyList<DetectionResult> detections, int imageWidth, int imageHeight, out RectangleF selectedBox, out double offsetX, out double offsetY, out int staleFrames)
+    {
+        selectedBox = RectangleF.Empty;
+        offsetX = 0.0;
+        offsetY = 0.0;
+        staleFrames = 0;
+
+        if (_hasLockedAimTarget)
+        {
+            var associatedDetection = FindAssociatedDetectionLocked(detections, imageWidth, imageHeight);
+            if (associatedDetection != null)
+            {
+                selectedBox = associatedDetection.BoundingBox;
+                UpdateLockedAimTargetLocked(selectedBox, imageWidth, imageHeight, out offsetX, out offsetY);
+                return true;
+            }
+
+            if (TryHoldLockedAimTargetLocked(out selectedBox, out offsetX, out offsetY, out staleFrames))
+            {
+                return true;
+            }
+        }
+
+        var nearestDetection = GetNearestDetectionToCenter(detections, imageWidth, imageHeight);
+        if (nearestDetection == null)
+        {
+            return false;
+        }
+
+        selectedBox = nearestDetection.BoundingBox;
+        if (IsAimTargetOffsetOutOfRange(selectedBox, imageWidth, imageHeight))
+        {
+            return false;
+        }
+
+        UpdateLockedAimTargetLocked(selectedBox, imageWidth, imageHeight, out offsetX, out offsetY);
+        return true;
+    }
+
+    private DetectionResult? FindAssociatedDetectionLocked(IReadOnlyList<DetectionResult> detections, int imageWidth, int imageHeight)
+    {
+        if (!_hasLockedAimTarget || detections.Count == 0)
+        {
+            return null;
+        }
+
+        var associationDistance = GetAssociationDistanceThresholdLocked(imageWidth, imageHeight);
+        DetectionResult? bestDetection = null;
+        double bestScore = double.MinValue;
+
+        foreach (var detection in detections)
+        {
+            var box = detection.BoundingBox;
+            if (IsAimTargetOffsetOutOfRange(box, imageWidth, imageHeight))
+            {
+                continue;
+            }
+
+            var centerDistance = GetBoxCenterDistance(box, _lockedAimTargetBox);
+            var overlap = CalculateBoxIoU(box, _lockedAimTargetBox);
+            if (centerDistance > associationDistance && overlap <= 0.02f)
+            {
+                continue;
+            }
+
+            var normalizedDistance = centerDistance / Math.Max(associationDistance, 1.0);
+            var score = overlap - normalizedDistance;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestDetection = detection;
+            }
+        }
+
+        return bestDetection;
+    }
+
+    private double GetAssociationDistanceThresholdLocked(int imageWidth, int imageHeight)
+    {
+        var imageThreshold = Math.Min(imageWidth, imageHeight) * ClampAimTargetAssociationDistanceRatio(_aimTargetAssociationDistanceRatio);
+        var boxThreshold = Math.Max(Math.Max(_lockedAimTargetBox.Width, _lockedAimTargetBox.Height) * 0.85, 18.0);
+        return Math.Max(imageThreshold, boxThreshold);
+    }
+
+    private bool TryHoldLockedAimTargetLocked(out RectangleF selectedBox, out double offsetX, out double offsetY, out int staleFrames)
+    {
+        selectedBox = RectangleF.Empty;
+        offsetX = 0.0;
+        offsetY = 0.0;
+        staleFrames = 0;
+
+        if (!_hasLockedAimTarget)
+        {
+            return false;
+        }
+
+        _lockedAimTargetLostFrames++;
+        if (_lockedAimTargetLostFrames > ClampAimTargetHoldFrames(_aimTargetHoldFrames))
+        {
+            ClearAimTargetStateLocked(clearPublishedSnapshot: false);
+            return false;
+        }
+
+        selectedBox = _lockedAimTargetBox;
+        offsetX = _lockedAimTargetOffsetX;
+        offsetY = _lockedAimTargetOffsetY;
+        staleFrames = _lockedAimTargetLostFrames;
+        return true;
+    }
+
+    private void UpdateLockedAimTargetLocked(RectangleF box, int imageWidth, int imageHeight, out double offsetX, out double offsetY)
+    {
+        GetAimTargetOffset(box, imageWidth, imageHeight, out offsetX, out offsetY);
+        _hasLockedAimTarget = true;
+        _lockedAimTargetBox = box;
+        _lockedAimTargetOffsetX = offsetX;
+        _lockedAimTargetOffsetY = offsetY;
+        _lockedAimTargetLostFrames = 0;
+    }
+
+    private bool IsAimTargetOffsetOutOfRange(RectangleF box, int imageWidth, int imageHeight)
+    {
+        GetAimTargetOffset(box, imageWidth, imageHeight, out var offsetX, out var offsetY);
+        var maxOffsetRatio = ClampAimTargetMaxOffsetRatio(_aimTargetMaxOffsetRatio);
+        return Math.Abs(offsetX) > imageWidth * maxOffsetRatio || Math.Abs(offsetY) > imageHeight * maxOffsetRatio;
+    }
+
+    private static void GetAimReferencePoint(int imageWidth, int imageHeight, out double referenceX, out double referenceY)
+    {
+        referenceX = imageWidth * 0.5;
+        referenceY = imageHeight * 0.5 + AimReferenceYOffsetPixels;
+    }
+
+    private static void GetAimTargetOffset(RectangleF box, int imageWidth, int imageHeight, out double offsetX, out double offsetY)
+    {
+        var boxCenterX = box.Left + box.Width * 0.5f;
+        var boxCenterY = box.Top + box.Height * 0.5f;
+        GetAimReferencePoint(imageWidth, imageHeight, out var referenceX, out var referenceY);
+        offsetX = boxCenterX - referenceX;
+        offsetY = boxCenterY - referenceY;
+    }
+
+    private static double GetBoxCenterDistance(RectangleF firstBox, RectangleF secondBox)
+    {
+        var firstCenterX = firstBox.Left + firstBox.Width * 0.5f;
+        var firstCenterY = firstBox.Top + firstBox.Height * 0.5f;
+        var secondCenterX = secondBox.Left + secondBox.Width * 0.5f;
+        var secondCenterY = secondBox.Top + secondBox.Height * 0.5f;
+        var deltaX = firstCenterX - secondCenterX;
+        var deltaY = firstCenterY - secondCenterY;
+        return Math.Sqrt((deltaX * deltaX) + (deltaY * deltaY));
+    }
+
+    private static float CalculateBoxIoU(RectangleF firstBox, RectangleF secondBox)
+    {
+        var left = Math.Max(firstBox.Left, secondBox.Left);
+        var top = Math.Max(firstBox.Top, secondBox.Top);
+        var right = Math.Min(firstBox.Right, secondBox.Right);
+        var bottom = Math.Min(firstBox.Bottom, secondBox.Bottom);
+
+        var overlapWidth = right - left;
+        var overlapHeight = bottom - top;
+        if (overlapWidth <= 0f || overlapHeight <= 0f)
+        {
+            return 0f;
+        }
+
+        var overlapArea = overlapWidth * overlapHeight;
+        var unionArea = (firstBox.Width * firstBox.Height) + (secondBox.Width * secondBox.Height) - overlapArea;
+        if (unionArea <= 0f)
+        {
+            return 0f;
+        }
+
+        return overlapArea / unionArea;
+    }
+
+    private void ClearAimTargetStateLocked(bool clearPublishedSnapshot)
+    {
+        _hasLockedAimTarget = false;
+        _lockedAimTargetBox = RectangleF.Empty;
+        _lockedAimTargetOffsetX = 0.0;
+        _lockedAimTargetOffsetY = 0.0;
+        _lockedAimTargetLostFrames = 0;
+
+        if (!clearPublishedSnapshot)
+        {
+            return;
+        }
+
+        _latestAimTargetVersion = 0;
+        _latestAimTargetStaleFrames = 0;
+        _latestAimTargetOffsetX = 0.0;
+        _latestAimTargetOffsetY = 0.0;
+    }
+
+    private DetectionResult? GetNearestDetectionToCenter(IReadOnlyList<DetectionResult> detections, int imageWidth, int imageHeight)
+    {
+        if (detections.Count == 0 || imageWidth <= 0 || imageHeight <= 0)
+        {
+            return null;
+        }
+
+        GetAimReferencePoint(imageWidth, imageHeight, out var referenceX, out var referenceY);
+        DetectionResult? nearestDetection = null;
+        double nearestDistanceSquared = double.MaxValue;
+
+        foreach (var detection in detections)
+        {
+            var box = detection.BoundingBox;
+            var boxCenterX = box.Left + box.Width * 0.5f;
+            var boxCenterY = box.Top + box.Height * 0.5f;
+            var deltaX = boxCenterX - referenceX;
+            var deltaY = boxCenterY - referenceY;
+            var distanceSquared = deltaX * deltaX + deltaY * deltaY;
+            if (distanceSquared < nearestDistanceSquared)
+            {
+                nearestDistanceSquared = distanceSquared;
+                nearestDetection = detection;
+            }
+        }
+
+        return nearestDetection;
+    }
+
+    private void ResetAimTargetSnapshot()
+    {
+        lock (_aimTargetLock)
+        {
+            ClearAimTargetStateLocked(clearPublishedSnapshot: true);
+        }
+    }
+
     private static float GetDetectionArea(RectangleF box)
     {
         return Math.Max(0f, box.Width) * Math.Max(0f, box.Height);
@@ -265,15 +522,22 @@ public partial class Main
         float centerX = box.Left + box.Width * 0.5f;
         float centerY = box.Top + box.Height * 0.5f;
         const float selfFilterMinHeightRatio = 0.12f;
+        const float crosshairLowerLeftMinOffsetXRatio = -0.28f;
+        const float crosshairLowerLeftMaxOffsetXRatio = 0.08f;
+        const float crosshairLowerLeftMinOffsetYRatio = 0.02f;
+        const float crosshairLowerLeftMaxOffsetYRatio = 0.48f;
+        const float nearBottomOffsetYRatio = 0.18f;
 
-        // 准星中心默认在屏幕中心；自身头部常出现在其左下区域
+        GetAimReferencePoint(screenWidth, screenHeight, out var referenceX, out var referenceY);
+
+        // 使用统一的瞄准参考点；自身头部常出现在其左下区域
         bool inCrosshairLowerLeftRegion =
-            centerX >= screenWidth * 0.22f &&
-            centerX <= screenWidth * 0.58f &&
-            centerY >= screenHeight * 0.52f &&
-            centerY <= screenHeight * 0.98f;
+            centerX >= referenceX + screenWidth * crosshairLowerLeftMinOffsetXRatio &&
+            centerX <= referenceX + screenWidth * crosshairLowerLeftMaxOffsetXRatio &&
+            centerY >= referenceY + screenHeight * crosshairLowerLeftMinOffsetYRatio &&
+            centerY <= referenceY + screenHeight * crosshairLowerLeftMaxOffsetYRatio;
 
-        bool nearBottom = centerY >= screenHeight * 0.68f;
+        bool nearBottom = centerY >= referenceY + screenHeight * nearBottomOffsetYRatio;
         bool isLargeBox = areaRatio >= _selfFilterAreaRatio || heightRatio >= selfFilterMinHeightRatio;
 
         return isLargeBox && nearBottom && inCrosshairLowerLeftRegion;

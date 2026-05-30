@@ -28,6 +28,7 @@ public partial class Main : Form
         StopCapture();
         _yoloDetector?.Dispose();
         StopMouseDownMove();
+        StopMousePhysics(clearTargetSnapshot: true);
         SaveSelectionState();
         ReleaseGlobalMouseHook();
         ReleaseGlobalKeyboardHook();
@@ -42,6 +43,7 @@ public partial class Main : Form
     {
         StopCapture();
         StopMouseDownMove();
+        StopMousePhysics(clearTargetSnapshot: true);
         base.OnFormClosed(e);
     }
 

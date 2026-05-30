@@ -27,12 +27,13 @@ public partial class Main
             Dock = DockStyle.Fill,
             BackColor = Color.LightGray,
             ColumnCount = 2,
-            RowCount = 2,
+            RowCount = 3,
             Padding = new Padding(10, 8, 10, 8)
         };
         mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30f));
         mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70f));
         mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var rightLayout = new TableLayoutPanel
@@ -110,6 +111,7 @@ public partial class Main
         mainLayout.Controls.Add(leftLayout, 0, 0);
         mainLayout.Controls.Add(rightLayout, 1, 0);
         mainLayout.SetColumnSpan(CreateSelfFilterSliderRow(mainLayout), 2);
+        mainLayout.SetColumnSpan(CreateAimKpSliderRow(mainLayout), 2);
 
         InitializeConfigSelectors(leftLayout);
         this.Controls.Add(mainLayout);
@@ -192,6 +194,58 @@ public partial class Main
         return sliderRow;
     }
 
+    private Control CreateAimKpSliderRow(TableLayoutPanel mainLayout)
+    {
+        var sliderRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 1,
+            Margin = new Padding(0, 6, 0, 0),
+            Padding = new Padding(2, 0, 2, 0),
+            AutoSize = true
+        };
+        sliderRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        sliderRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        sliderRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var titleLabel = new Label
+        {
+            Text = "瞄准弹簧 Kp",
+            AutoSize = true,
+            Margin = new Padding(0, 7, 10, 0)
+        };
+
+        _aimKpSlider = new TrackBar
+        {
+            Minimum = AimKpSliderMin,
+            Maximum = AimKpSliderMax,
+            TickFrequency = 100,
+            SmallChange = 1,
+            LargeChange = 10,
+            Dock = DockStyle.Fill,
+            AutoSize = false,
+            Height = 30,
+            Margin = new Padding(0, 0, 10, 0)
+        };
+        _aimKpSlider.ValueChanged += AimKpSlider_ValueChanged;
+
+        _aimKpSliderValueLabel = new Label
+        {
+            AutoSize = true,
+            Margin = new Padding(0, 7, 0, 0),
+            ForeColor = Color.DarkSlateBlue
+        };
+
+        sliderRow.Controls.Add(titleLabel, 0, 0);
+        sliderRow.Controls.Add(_aimKpSlider, 1, 0);
+        sliderRow.Controls.Add(_aimKpSliderValueLabel, 2, 0);
+
+        mainLayout.Controls.Add(sliderRow, 0, 2);
+        ApplyAimPhysicsKpToUiAndState();
+        return sliderRow;
+    }
+
     private void SelfFilterSlider_ValueChanged(object? sender, EventArgs e)
     {
         if (_suppressSliderEvent || _selfFilterSlider == null)
@@ -221,11 +275,48 @@ public partial class Main
         _yoloDetector?.SetSelfFilterAreaRatioThreshold(_selfFilterAreaRatio);
     }
 
+    private void AimKpSlider_ValueChanged(object? sender, EventArgs e)
+    {
+        if (_suppressAimKpSliderEvent || _aimKpSlider == null)
+        {
+            return;
+        }
+
+        _aimPhysicsKp = SliderValueToAimKp(_aimKpSlider.Value);
+        _aimPhysicsKd = ComputeCriticalDampingKd(_aimPhysicsKp);
+        UpdateAimKpValueLabel(_aimPhysicsKp, _aimPhysicsKd);
+        QueueSaveConfigDebounced();
+    }
+
+    private void ApplyAimPhysicsKpToUiAndState()
+    {
+        _aimPhysicsKp = ClampAimKp(_aimPhysicsKp);
+        _aimPhysicsKd = ComputeCriticalDampingKd(_aimPhysicsKp);
+
+        if (_aimKpSlider != null)
+        {
+            var sliderValue = AimKpToSliderValue(_aimPhysicsKp);
+            _suppressAimKpSliderEvent = true;
+            _aimKpSlider.Value = Math.Clamp(sliderValue, _aimKpSlider.Minimum, _aimKpSlider.Maximum);
+            _suppressAimKpSliderEvent = false;
+        }
+
+        UpdateAimKpValueLabel(_aimPhysicsKp, _aimPhysicsKd);
+    }
+
     private void UpdateSelfFilterSliderValueLabel(float areaRatio)
     {
         if (_selfFilterSliderValueLabel != null)
         {
             _selfFilterSliderValueLabel.Text = areaRatio.ToString("F3");
+        }
+    }
+
+    private void UpdateAimKpValueLabel(double kp, double kd)
+    {
+        if (_aimKpSliderValueLabel != null)
+        {
+            _aimKpSliderValueLabel.Text = $"Kp {kp:F1} / Kd {kd:F2}";
         }
     }
 

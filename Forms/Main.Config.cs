@@ -11,11 +11,25 @@ public partial class Main
     {
         public List<object[]>? Options { get; set; }
         public DetectorConfig? Detector { get; set; }
+        public AimPhysicsConfig? AimPhysics { get; set; }
+        public AimTargetConfig? AimTarget { get; set; }
     }
 
     private sealed class DetectorConfig
     {
         public float SelfFilterAreaRatio { get; set; } = 0.018f;
+    }
+
+    private sealed class AimPhysicsConfig
+    {
+        public double Kp { get; set; } = DefaultAimKp;
+    }
+
+    private sealed class AimTargetConfig
+    {
+        public int HoldFrames { get; set; } = DefaultAimTargetHoldFrames;
+        public double AssociationDistanceRatio { get; set; } = DefaultAimTargetAssociationDistanceRatio;
+        public double MaxOffsetRatio { get; set; } = DefaultAimTargetMaxOffsetRatio;
     }
 
     private void InitializeConfigPath()
@@ -59,15 +73,30 @@ public partial class Main
                 Detector = new DetectorConfig
                 {
                     SelfFilterAreaRatio = _selfFilterAreaRatio
+                },
+                AimPhysics = new AimPhysicsConfig
+                {
+                    Kp = ClampAimKp(_aimPhysicsKp)
+                },
+                AimTarget = new AimTargetConfig
+                {
+                    HoldFrames = ClampAimTargetHoldFrames(_aimTargetHoldFrames),
+                    AssociationDistanceRatio = ClampAimTargetAssociationDistanceRatio(_aimTargetAssociationDistanceRatio),
+                    MaxOffsetRatio = ClampAimTargetMaxOffsetRatio(_aimTargetMaxOffsetRatio)
                 }
             };
 
             var json = JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_configPath, json);
-            if (TryParseConfig(json, out var parsedOptions, out var areaRatio))
+            if (TryParseConfig(json, out var parsedOptions, out var areaRatio, out var aimKp, out var aimTargetHoldFrames, out var aimTargetAssociationDistanceRatio, out var aimTargetMaxOffsetRatio))
             {
                 _configOptions = parsedOptions;
                 _selfFilterAreaRatio = areaRatio;
+                _aimPhysicsKp = aimKp;
+                _aimPhysicsKd = ComputeCriticalDampingKd(_aimPhysicsKp);
+                _aimTargetHoldFrames = aimTargetHoldFrames;
+                _aimTargetAssociationDistanceRatio = aimTargetAssociationDistanceRatio;
+                _aimTargetMaxOffsetRatio = aimTargetMaxOffsetRatio;
             }
             Logger.Info($"未找到配置文件，已创建默认配置: {_configPath}");
         }
@@ -88,10 +117,15 @@ public partial class Main
             }
 
             var json = File.ReadAllText(_configPath);
-            if (TryParseConfig(json, out var options, out var areaRatio))
+            if (TryParseConfig(json, out var options, out var areaRatio, out var aimKp, out var aimTargetHoldFrames, out var aimTargetAssociationDistanceRatio, out var aimTargetMaxOffsetRatio))
             {
                 _configOptions = options;
                 _selfFilterAreaRatio = areaRatio;
+                _aimPhysicsKp = aimKp;
+                _aimPhysicsKd = ComputeCriticalDampingKd(_aimPhysicsKp);
+                _aimTargetHoldFrames = aimTargetHoldFrames;
+                _aimTargetAssociationDistanceRatio = aimTargetAssociationDistanceRatio;
+                _aimTargetMaxOffsetRatio = aimTargetMaxOffsetRatio;
                 Logger.Info($"配置文件加载成功, 共有 {_configOptions.Count} 个选项");
                 return true;
             }
@@ -160,12 +194,14 @@ public partial class Main
                     {
                         RefreshOptionSelections();
                         ApplySelfFilterAreaRatioToUiAndDetector();
+                        ApplyAimPhysicsKpToUiAndState();
                     }));
                 }
                 else
                 {
                     RefreshOptionSelections();
                     ApplySelfFilterAreaRatioToUiAndDetector();
+                    ApplyAimPhysicsKpToUiAndState();
                 }
             }
         }
@@ -201,10 +237,14 @@ public partial class Main
         }
     }
 
-    private bool TryParseConfig(string json, out List<ConfigOption> options, out float selfFilterAreaRatio)
+    private bool TryParseConfig(string json, out List<ConfigOption> options, out float selfFilterAreaRatio, out double aimKp, out int aimTargetHoldFrames, out double aimTargetAssociationDistanceRatio, out double aimTargetMaxOffsetRatio)
     {
         options = new List<ConfigOption>();
         selfFilterAreaRatio = _selfFilterAreaRatio;
+        aimKp = _aimPhysicsKp;
+        aimTargetHoldFrames = _aimTargetHoldFrames;
+        aimTargetAssociationDistanceRatio = _aimTargetAssociationDistanceRatio;
+        aimTargetMaxOffsetRatio = _aimTargetMaxOffsetRatio;
         try
         {
             using var doc = JsonDocument.Parse(json);
@@ -237,6 +277,72 @@ public partial class Main
                         }
 
                         selfFilterAreaRatio = ClampSelfFilterAreaRatio(ratio);
+                    }
+                }
+
+                if (doc.RootElement.TryGetProperty("AimPhysics", out var aimPhysicsElement) && aimPhysicsElement.ValueKind == JsonValueKind.Object)
+                {
+                    if (aimPhysicsElement.TryGetProperty("Kp", out var kpElement))
+                    {
+                        double kp = aimKp;
+                        if (kpElement.ValueKind == JsonValueKind.Number)
+                        {
+                            kp = kpElement.GetDouble();
+                        }
+                        else if (kpElement.ValueKind == JsonValueKind.String && double.TryParse(kpElement.GetString(), out var parsedKp))
+                        {
+                            kp = parsedKp;
+                        }
+
+                        aimKp = ClampAimKp(kp);
+                    }
+                }
+
+                if (doc.RootElement.TryGetProperty("AimTarget", out var aimTargetElement) && aimTargetElement.ValueKind == JsonValueKind.Object)
+                {
+                    if (aimTargetElement.TryGetProperty("HoldFrames", out var holdFramesElement))
+                    {
+                        int holdFrames = aimTargetHoldFrames;
+                        if (holdFramesElement.ValueKind == JsonValueKind.Number)
+                        {
+                            holdFrames = holdFramesElement.GetInt32();
+                        }
+                        else if (holdFramesElement.ValueKind == JsonValueKind.String && int.TryParse(holdFramesElement.GetString(), out var parsedHoldFrames))
+                        {
+                            holdFrames = parsedHoldFrames;
+                        }
+
+                        aimTargetHoldFrames = ClampAimTargetHoldFrames(holdFrames);
+                    }
+
+                    if (aimTargetElement.TryGetProperty("AssociationDistanceRatio", out var associationDistanceElement))
+                    {
+                        double associationDistanceRatio = aimTargetAssociationDistanceRatio;
+                        if (associationDistanceElement.ValueKind == JsonValueKind.Number)
+                        {
+                            associationDistanceRatio = associationDistanceElement.GetDouble();
+                        }
+                        else if (associationDistanceElement.ValueKind == JsonValueKind.String && double.TryParse(associationDistanceElement.GetString(), out var parsedAssociationDistanceRatio))
+                        {
+                            associationDistanceRatio = parsedAssociationDistanceRatio;
+                        }
+
+                        aimTargetAssociationDistanceRatio = ClampAimTargetAssociationDistanceRatio(associationDistanceRatio);
+                    }
+
+                    if (aimTargetElement.TryGetProperty("MaxOffsetRatio", out var maxOffsetElement))
+                    {
+                        double maxOffsetRatio = aimTargetMaxOffsetRatio;
+                        if (maxOffsetElement.ValueKind == JsonValueKind.Number)
+                        {
+                            maxOffsetRatio = maxOffsetElement.GetDouble();
+                        }
+                        else if (maxOffsetElement.ValueKind == JsonValueKind.String && double.TryParse(maxOffsetElement.GetString(), out var parsedMaxOffsetRatio))
+                        {
+                            maxOffsetRatio = parsedMaxOffsetRatio;
+                        }
+
+                        aimTargetMaxOffsetRatio = ClampAimTargetMaxOffsetRatio(maxOffsetRatio);
                     }
                 }
             }
@@ -313,6 +419,16 @@ public partial class Main
                 Detector = new DetectorConfig
                 {
                     SelfFilterAreaRatio = ClampSelfFilterAreaRatio(_selfFilterAreaRatio)
+                },
+                AimPhysics = new AimPhysicsConfig
+                {
+                    Kp = ClampAimKp(_aimPhysicsKp)
+                },
+                AimTarget = new AimTargetConfig
+                {
+                    HoldFrames = ClampAimTargetHoldFrames(_aimTargetHoldFrames),
+                    AssociationDistanceRatio = ClampAimTargetAssociationDistanceRatio(_aimTargetAssociationDistanceRatio),
+                    MaxOffsetRatio = ClampAimTargetMaxOffsetRatio(_aimTargetMaxOffsetRatio)
                 }
             };
 
